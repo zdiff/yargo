@@ -17,7 +17,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run benchmarks
-        run: go test -bench=. ./parser/ ./scanner/ | tee output.txt
+        # Strip the MB/s column: github-action-benchmark treats every metric
+        # as lower-is-better, so throughput improvements trip the alert (and
+        # real throughput drops never would). ns/op tracks the same
+        # benchmarks with correct direction.
+        run: go test -bench=. ./parser/ ./scanner/ | sed -E 's|[[:space:]]+[0-9.]+ MB/s||' | tee output.txt
       - name: Download previous benchmark data
         uses: actions/cache@v5
         with:
