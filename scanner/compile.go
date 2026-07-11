@@ -153,6 +153,7 @@ func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName stri
 		compile:     opts.RegexCompiler,
 		ruleIndex:   ruleIdx,
 		stringIndex: stringIndex,
+		fullword:    s.Modifiers.Fullword,
 	}
 	regexIdx := len(rules.regexPatterns)
 	rules.regexPatterns = append(rules.regexPatterns, rp)

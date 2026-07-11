@@ -261,9 +261,9 @@ func TestBase64Modifier(t *testing.T) {
 		data []byte
 		want bool
 	}{
-		{"rotation0", []byte("data: c2VjcmV0"), true},   // "secret" at position 0 mod 3
-		{"rotation1", []byte("data: AHNlY3JldA"), true}, // ?secret -> base64 -> skip 2 chars
-		{"rotation2", []byte("data: AAc2VjcmV0"), true}, // ??secret -> base64 -> skip 4 chars
+		{"rotation0", []byte("data: c2VjcmV0"), true},     // "secret" at position 0 mod 3
+		{"rotation1", []byte("data: AHNlY3JldA"), true},   // ?secret -> base64 -> skip 2 chars
+		{"rotation2", []byte("data: QUJzZWNyZXQ="), true}, // "ABsecret" -> base64 -> pad-2 pattern (skip 3 chars)
 		{"no_match", []byte("data: not_encoded"), false},
 	}
 
@@ -357,6 +357,148 @@ func TestTimeout(t *testing.T) {
 	err = rules.ScanMem(data, 0, time.Millisecond, &matches)
 	if err != nil {
 		t.Fatalf("ScanMem() error = %v", err)
+	}
+}
+
+func TestZeroTimeoutMeansNoTimeout(t *testing.T) {
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{
+			{
+				Name: "test",
+				Strings: []*ast.StringDef{
+					{Name: "$s", Value: ast.TextString{Value: "test"}},
+				},
+				Condition: ast.AnyOf{Pattern: "them"},
+			},
+		},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("test data"), 0, 0, &matches); err != nil {
+		t.Fatalf("ScanMem() with zero timeout error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("expected 1 match with zero timeout, got %d", len(matches))
+	}
+}
+
+func TestRegexFullword(t *testing.T) {
+	rs, err := parser.New().Parse(`rule fw { strings: $re = /abc[0-9]+/ fullword condition: any of them }`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		data string
+		want int
+	}{
+		{"abc123", 1},
+		{" abc123.", 1},
+		{"xabc123", 0},
+		{"abc123x", 0},
+	}
+	for _, tt := range tests {
+		var matches MatchRules
+		if err := rules.ScanMem([]byte(tt.data), 0, time.Second, &matches); err != nil {
+			t.Fatalf("ScanMem(%q) error = %v", tt.data, err)
+		}
+		if len(matches) != tt.want {
+			t.Errorf("ScanMem(%q): expected %d matches, got %d", tt.data, tt.want, len(matches))
+		}
+	}
+}
+
+func TestRegexMultipleOccurrences(t *testing.T) {
+	rs, err := parser.New().Parse(`rule multi { strings: $re = /abc[0-9]+/ condition: any of them }`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	data := make([]byte, 106)
+	for i := range data {
+		data[i] = '-'
+	}
+	copy(data[0:], "abc111")
+	copy(data[100:], "abc222")
+
+	var matches MatchRules
+	if err := rules.ScanMem(data, 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 matching rule, got %d", len(matches))
+	}
+	if len(matches[0].Strings) != 2 {
+		t.Fatalf("expected 2 recorded occurrences, got %d: %v", len(matches[0].Strings), matches[0].Strings)
+	}
+	got := map[string]bool{}
+	for _, s := range matches[0].Strings {
+		got[string(s.Data)] = true
+	}
+	if !got["abc111"] || !got["abc222"] {
+		t.Errorf("expected occurrences abc111 and abc222, got %v", matches[0].Strings)
+	}
+}
+
+func TestRegexAtSecondOccurrence(t *testing.T) {
+	rs, err := parser.New().Parse(`rule at2 { strings: $re = /abc[0-9]+/ condition: $re at 100 }`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	data := make([]byte, 106)
+	for i := range data {
+		data[i] = '-'
+	}
+	copy(data[0:], "abc111")
+	copy(data[100:], "abc222")
+
+	var matches MatchRules
+	if err := rules.ScanMem(data, 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("expected rule to match on second occurrence at 100, got %d matches", len(matches))
+	}
+}
+
+func TestAlternationBranchWithoutAtom(t *testing.T) {
+	rs, err := parser.New().Parse(`rule uncovered { strings: $re = /return|malwarefunc/ condition: any of them }`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if _, err := Compile(rs); err == nil {
+		t.Error("expected compile error for alternation branch without a usable atom")
+	}
+
+	rules, err := CompileWithOptions(rs, CompileOptions{SkipInvalidRegex: true})
+	if err != nil {
+		t.Fatalf("CompileWithOptions() error = %v", err)
+	}
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("this contains return only"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected skipped string to never match, got %d matches", len(matches))
 	}
 }
 
