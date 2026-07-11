@@ -103,42 +103,66 @@ func parseRegex(s string) (string, ast.RegexModifiers) {
 	return s, mods
 }
 
-func parseHexAlt(s string) ast.HexAlt {
-	if len(s) < 2 {
-		return ast.HexAlt{}
+func parseHexAlt(s string) (ast.HexAlt, error) {
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return ast.HexAlt{}, fmt.Errorf("invalid hex alternation %q", s)
 	}
 	s = s[1 : len(s)-1]
 	parts := strings.Split(s, "|")
 	items := make([]ast.HexAltItem, len(parts))
 	for i, part := range parts {
+		part = strings.TrimSpace(part)
 		if part == "??" {
 			items[i] = ast.HexAltItem{Wildcard: true}
-		} else {
-			b, _ := strconv.ParseUint(part, 16, 8)
-			v := byte(b)
-			items[i] = ast.HexAltItem{Byte: &v}
+			continue
 		}
+		if len(part) != 2 {
+			return ast.HexAlt{}, fmt.Errorf("unsupported hex alternative %q (only single bytes and ?? are supported)", part)
+		}
+		b, err := strconv.ParseUint(part, 16, 8)
+		if err != nil {
+			return ast.HexAlt{}, fmt.Errorf("invalid hex alternative %q", part)
+		}
+		v := byte(b)
+		items[i] = ast.HexAltItem{Byte: &v}
 	}
-	return ast.HexAlt{Alternatives: items}
+	return ast.HexAlt{Alternatives: items}, nil
 }
 
-func parseHexJump(s string) ast.HexJump {
+func parseHexJump(s string) (ast.HexJump, error) {
+	orig := s
 	s = strings.Trim(s, "[] \t")
 	if s == "-" {
-		return ast.HexJump{}
+		return ast.HexJump{}, nil
+	}
+	parseBound := func(s string) (*int, error) {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid hex jump %q", orig)
+		}
+		return &n, nil
 	}
 	if before, after, ok := strings.Cut(s, "-"); ok {
 		var jump ast.HexJump
+		var err error
 		if minStr := strings.TrimSpace(before); minStr != "" {
-			min, _ := strconv.Atoi(minStr)
-			jump.Min = &min
+			if jump.Min, err = parseBound(minStr); err != nil {
+				return ast.HexJump{}, err
+			}
 		}
 		if maxStr := strings.TrimSpace(after); maxStr != "" {
-			max, _ := strconv.Atoi(maxStr)
-			jump.Max = &max
+			if jump.Max, err = parseBound(maxStr); err != nil {
+				return ast.HexJump{}, err
+			}
 		}
-		return jump
+		if jump.Min != nil && jump.Max != nil && *jump.Min > *jump.Max {
+			return ast.HexJump{}, fmt.Errorf("invalid hex jump %q: lower bound exceeds upper bound", orig)
+		}
+		return jump, nil
 	}
-	n, _ := strconv.Atoi(s)
-	return ast.HexJump{Min: &n, Max: &n}
+	n, err := parseBound(s)
+	if err != nil {
+		return ast.HexJump{}, err
+	}
+	return ast.HexJump{Min: n, Max: n}, nil
 }

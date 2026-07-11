@@ -114,7 +114,7 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 	sid := *sID
 	for at < len(haystack) {
 		if pf != nil {
-			if prestate.IsEffective(at) && sID == &a.startID {
+			if prestate.IsEffective(at) && sid == a.startID {
 				c := nextPrefilter(prestate, pf, haystack, at)
 				if c == noneCandidate {
 					*sID = sid
@@ -144,7 +144,10 @@ func overlappingFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at in
 		return nil
 	}
 
-	matchCount := len(a.matches[*id])
+	matchCount := 0
+	if a.hasMatch(*id) {
+		matchCount = len(a.matches[*id])
+	}
 
 	if *matchIndex < matchCount {
 		result := a.GetMatch(*id, *matchIndex, at)

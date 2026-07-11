@@ -3,8 +3,6 @@ package parser
 import (
 	"fmt"
 	"strconv"
-	"strings"
-	"unicode"
 
 	"github.com/sansecio/yargo/ast"
 )
@@ -74,15 +72,24 @@ func (l *yaraLexer) Lex(lval *yySymType) int {
 	return 0 // EOF
 }
 
+// Error records a parse error. The first error wins: goyacc reports a generic
+// "syntax error" after the lexer has already recorded a descriptive one.
 func (l *yaraLexer) Error(s string) {
-	l.err = s
+	if l.err == "" {
+		l.err = s
+	}
+}
+
+func (l *yaraLexer) errorf(format string, args ...any) {
+	l.Error(fmt.Sprintf(format, args...))
 }
 
 func (l *yaraLexer) skipWhitespace() bool {
 	if l.pos >= len(l.input) {
 		return false
 	}
-	if unicode.IsSpace(rune(l.input[l.pos])) {
+	switch l.input[l.pos] {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
 		l.pos++
 		return true
 	}
@@ -110,6 +117,7 @@ func (l *yaraLexer) skipComment() bool {
 			}
 			l.pos++
 		}
+		l.errorf("unterminated block comment")
 		l.pos = len(l.input)
 		return true
 	}
@@ -145,27 +153,36 @@ func (l *yaraLexer) readQuotedString() string {
 		}
 		l.pos++
 	}
+	l.errorf("unterminated string literal")
 	return l.input[start:l.pos]
 }
 
 func (l *yaraLexer) readRegex() string {
 	start := l.pos
 	l.pos++ // skip opening /
+	inClass := false
 	for l.pos < len(l.input) {
-		if l.input[l.pos] == '\\' && l.pos+1 < len(l.input) {
+		switch {
+		case l.input[l.pos] == '\\' && l.pos+1 < len(l.input):
 			l.pos += 2
-			continue
-		}
-		if l.input[l.pos] == '/' {
+		case l.input[l.pos] == '[':
+			inClass = true
+			l.pos++
+		case inClass && l.input[l.pos] == ']':
+			inClass = false
+			l.pos++
+		case !inClass && l.input[l.pos] == '/':
 			l.pos++ // skip closing /
 			// Read flags
 			for l.pos < len(l.input) && (l.input[l.pos] == 's' || l.input[l.pos] == 'i' || l.input[l.pos] == 'm') {
 				l.pos++
 			}
 			return l.input[start:l.pos]
+		default:
+			l.pos++
 		}
-		l.pos++
 	}
+	l.errorf("unterminated regular expression")
 	return l.input[start:l.pos]
 }
 
@@ -181,7 +198,7 @@ func (l *yaraLexer) lexRoot(lval *yySymType) int {
 		return IDENT
 	}
 	l.pos++
-	l.err = fmt.Sprintf("unexpected character %q at position %d", ch, l.pos-1)
+	l.errorf("unexpected character %q at position %d", ch, l.pos-1)
 	return 0
 }
 
@@ -230,7 +247,7 @@ func (l *yaraLexer) lexRuleBody(lval *yySymType) int {
 	}
 
 	l.pos++
-	l.err = fmt.Sprintf("unexpected character %q in rule body", ch)
+	l.errorf("unexpected character %q in rule body", ch)
 	return 0
 }
 
@@ -305,17 +322,14 @@ func (l *yaraLexer) lexHexString(lval *yySymType) int {
 
 	if isHexDigit(ch) {
 		if l.pos+1 < len(l.input) && isHexDigit(l.input[l.pos+1]) {
-			hi := l.input[l.pos]
-			lo := l.input[l.pos+1]
-			val, _ := strconv.ParseUint(string([]byte{hi, lo}), 16, 8)
-			lval.byt = byte(val)
+			lval.byt = hexVal(l.input[l.pos])<<4 | hexVal(l.input[l.pos+1])
 			l.pos += 2
 			return HEX_BYTE
 		}
 	}
 
 	l.pos++
-	l.err = fmt.Sprintf("unexpected character %q in hex string", ch)
+	l.errorf("unexpected character %q in hex string", ch)
 	return 0
 }
 
@@ -324,9 +338,11 @@ func (l *yaraLexer) lexHexJumpToken(lval *yySymType) int {
 	for l.pos < len(l.input) && l.input[l.pos] != ']' {
 		l.pos++
 	}
-	if l.pos < len(l.input) {
-		l.pos++ // skip ]
+	if l.pos >= len(l.input) {
+		l.errorf("unterminated hex jump")
+		return 0
 	}
+	l.pos++ // skip ]
 	lval.str = l.input[start:l.pos]
 	return HEX_JUMP
 }
@@ -336,9 +352,11 @@ func (l *yaraLexer) lexHexAltToken(lval *yySymType) int {
 	for l.pos < len(l.input) && l.input[l.pos] != ')' {
 		l.pos++
 	}
-	if l.pos < len(l.input) {
-		l.pos++ // skip )
+	if l.pos >= len(l.input) {
+		l.errorf("unterminated hex alternation")
+		return 0
 	}
+	l.pos++ // skip )
 	lval.str = l.input[start:l.pos]
 	return HEX_ALT
 }
@@ -408,7 +426,7 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 	}
 
 	l.pos++
-	l.err = fmt.Sprintf("unexpected character %q in condition", ch)
+	l.errorf("unexpected character %q in condition", ch)
 	return 0
 }
 
@@ -430,12 +448,16 @@ func (l *yaraLexer) lexCondStringRef(lval *yySymType) int {
 
 func (l *yaraLexer) lexHexInt(lval *yySymType) int {
 	start := l.pos
-	l.pos += 2 // skip 0x
+	l.pos += 2 // skip 0x or 0X
 	for l.pos < len(l.input) && isHexDigit(l.input[l.pos]) {
 		l.pos++
 	}
 	s := l.input[start:l.pos]
-	v, _ := strconv.ParseInt(strings.TrimPrefix(s, "0x"), 16, 64)
+	v, err := strconv.ParseInt(s[2:], 16, 64)
+	if err != nil {
+		l.errorf("invalid integer literal %q", s)
+		return 0
+	}
 	lval.num = v
 	return INT_LIT
 }
@@ -445,9 +467,7 @@ func (l *yaraLexer) lexCondInt(lval *yySymType) int {
 	for l.pos < len(l.input) && isDigit(l.input[l.pos]) {
 		l.pos++
 	}
-	v, _ := strconv.ParseInt(l.input[start:l.pos], 10, 64)
-	lval.num = v
-	return INT_LIT
+	return l.intToken(lval, l.input[start:l.pos])
 }
 
 func (l *yaraLexer) lexInt(lval *yySymType) int {
@@ -458,7 +478,15 @@ func (l *yaraLexer) lexInt(lval *yySymType) int {
 	for l.pos < len(l.input) && isDigit(l.input[l.pos]) {
 		l.pos++
 	}
-	v, _ := strconv.ParseInt(l.input[start:l.pos], 10, 64)
+	return l.intToken(lval, l.input[start:l.pos])
+}
+
+func (l *yaraLexer) intToken(lval *yySymType, s string) int {
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		l.errorf("invalid integer literal %q", s)
+		return 0
+	}
 	lval.num = v
 	return INT_LIT
 }
@@ -477,4 +505,16 @@ func isAlnum(c byte) bool {
 
 func isHexDigit(c byte) bool {
 	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// hexVal returns the value of a hex digit; c must satisfy isHexDigit.
+func hexVal(c byte) byte {
+	switch {
+	case c <= '9':
+		return c - '0'
+	case c >= 'a':
+		return c - 'a' + 10
+	default:
+		return c - 'A' + 10
+	}
 }

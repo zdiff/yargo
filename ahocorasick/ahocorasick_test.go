@@ -1,6 +1,8 @@
 package ahocorasick
 
 import (
+	"bytes"
+	"math/rand"
 	"sync"
 	"testing"
 )
@@ -85,6 +87,80 @@ func TestIterOverlapping_SubstringPatterns(t *testing.T) {
 
 	if len(matches) != 3 {
 		t.Fatalf("expected 3 overlapping matches, got %d", len(matches))
+	}
+}
+
+func TestPrefilter_Engages(t *testing.T) {
+	ac := buildAC("zzq")
+	if ac.i.prefil == nil {
+		t.Fatal("expected prefilter to be built for a single pattern")
+	}
+
+	haystack := bytes.Repeat([]byte{'a'}, 1<<20)
+	iter := ac.IterOverlappingByte(haystack)
+	if m := iter.Next(); m != nil {
+		t.Fatalf("unexpected match at [%d,%d)", m.Start(), m.End())
+	}
+	if iter.prestate.skips == 0 {
+		t.Error("expected prefilter to engage during the scan (skips > 0)")
+	}
+}
+
+func TestPrefilter_SkipsToMatch(t *testing.T) {
+	haystack := bytes.Repeat([]byte{'q'}, 100000)
+	copy(haystack[50000:], "abz")
+
+	ac := buildAC("abz")
+	matches := collectMatches(ac, string(haystack))
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Start() != 50000 || matches[0].End() != 50003 {
+		t.Errorf("expected match at [50000,50003), got [%d,%d)", matches[0].Start(), matches[0].End())
+	}
+}
+
+func TestPrefilter_DifferentialAgainstNoPrefilter(t *testing.T) {
+	// Three patterns so the fixed rare-bytes builder (one byte per pattern)
+	// stays within the ≤3 byte limit and the prefilter is guaranteed to build.
+	patterns := [][]byte{
+		[]byte("zqx"),
+		[]byte("~jklm"),
+		[]byte("jkl"),
+	}
+	noPreBuilder := &iNFABuilder{denseDepth: 3, prefilter: false}
+
+	rng := rand.New(rand.NewSource(42))
+	for round := range 20 {
+		haystack := make([]byte, 1<<16)
+		for i := range haystack {
+			haystack[i] = byte('a' + rng.Intn(16))
+		}
+		for range 10 {
+			p := patterns[rng.Intn(len(patterns))]
+			pos := rng.Intn(len(haystack) - len(p))
+			copy(haystack[pos:], p)
+		}
+
+		builder := NewAhoCorasickBuilder()
+		withPre := builder.BuildByte(patterns)
+		if withPre.i.prefil == nil {
+			t.Fatal("expected prefilter to be built for these patterns")
+		}
+		noPre := AhoCorasick{noPreBuilder.build(patterns)}
+
+		got := collectMatches(withPre, string(haystack))
+		want := collectMatches(noPre, string(haystack))
+
+		if len(got) != len(want) {
+			t.Fatalf("round %d: prefilter scan found %d matches, reference found %d", round, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("round %d: match %d differs: got %+v, want %+v", round, i, got[i], want[i])
+			}
+		}
 	}
 }
 

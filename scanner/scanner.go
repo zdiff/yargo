@@ -80,6 +80,7 @@ type (
 		re          Regexp
 		ruleIndex   int
 		stringIndex int
+		fullword    bool
 	}
 
 	// compiledRule holds the compiled form of a single YARA rule.
@@ -90,10 +91,12 @@ type (
 		stringNames []string
 	}
 
-	// matchInfo records the position and data of a single pattern match.
+	// matchInfo records the position and length of a single pattern match.
+	// The matched bytes are only copied out of the scanned buffer for rules
+	// whose condition passes.
 	matchInfo struct {
-		pos  int
-		data []byte
+		pos int
+		len int
 	}
 )
 
@@ -151,28 +154,45 @@ func checkWordBoundary(buf []byte, start, end int) bool {
 	return true
 }
 
-// ScanMem scans a byte buffer for matching rules.
+// ScanMem scans a byte buffer for matching rules. A timeout of zero or less
+// means no timeout.
 func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration, cb ScanCallback) error {
 	if r.matcher == nil && len(r.regexPatterns) == 0 {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
-	ruleMatches := r.collectMatches(buf)
+	ruleMatches, err := r.collectMatches(ctx, buf)
+	if err != nil {
+		return err
+	}
 	return r.evaluateRules(ctx, buf, ruleMatches, cb)
 }
 
+// ctxCheckInterval is how many AC matches (or regex verification windows)
+// are processed between context cancellation checks.
+const ctxCheckInterval = 4096
+
 // collectMatches runs AC matching, atom-based regex verification, and full-scan
 // regex to collect all match positions per rule and string index.
-func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
+func (r *Rules) collectMatches(ctx context.Context, buf []byte) (map[int]map[int][]matchInfo, error) {
 	ruleMatches := make(map[int]map[int][]matchInfo)
 	atomCandidates := make(map[int][]int)
 
 	if r.matcher != nil {
 		iter := r.matcher.IterOverlappingByte(buf)
+		steps := 0
 		for match := iter.Next(); match != nil; match = iter.Next() {
+			steps++
+			if steps%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			ref := r.patternMap[match.Pattern()]
 
 			if ref.regexIdx >= 0 {
@@ -184,13 +204,12 @@ func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
 				continue
 			}
 
-			data := make([]byte, match.End()-match.Start())
-			copy(data, buf[match.Start():match.End()])
-			addMatch(ruleMatches, ref.ruleIndex, ref.stringIndex, match.Start(), data)
+			addMatch(ruleMatches, ref.ruleIndex, ref.stringIndex, match.Start(), match.End()-match.Start())
 		}
 	}
 
 	halfWindow := maxMatchLen / 2
+	windows := 0
 	for regexIdx, positions := range atomCandidates {
 		rp := r.regexPatterns[regexIdx]
 		re := rp.compiled()
@@ -199,22 +218,37 @@ func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
 		}
 		positions = dedupe(positions)
 
+		// Verify a window around every candidate position, recording each
+		// distinct match. Candidates inside an already verified match are
+		// skipped and windows start after it (non-overlapping, like RE2's
+		// FindAll), so the same match is never reported twice.
+		lastEnd := 0
 		for _, pos := range positions {
-			start := max(0, pos-halfWindow)
+			if pos < lastEnd {
+				continue
+			}
+			windows++
+			if windows%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			start := max(max(0, pos-halfWindow), lastEnd)
 			end := min(len(buf), pos+halfWindow)
 
-			if loc := recoverFindIndex(re, buf[start:end]); loc != nil {
-				matchStart := start + loc[0]
-				matchEnd := start + loc[1]
-				data := make([]byte, matchEnd-matchStart)
-				copy(data, buf[matchStart:matchEnd])
-				addMatch(ruleMatches, rp.ruleIndex, rp.stringIndex, matchStart, data)
-				break
+			loc := recoverFindIndex(re, buf[start:end])
+			if loc == nil {
+				continue
 			}
+			matchStart := start + loc[0]
+			matchEnd := start + loc[1]
+			lastEnd = matchEnd
+			if rp.fullword && !checkWordBoundary(buf, matchStart, matchEnd) {
+				continue
+			}
+			addMatch(ruleMatches, rp.ruleIndex, rp.stringIndex, matchStart, matchEnd-matchStart)
 		}
 	}
 
-	return ruleMatches
+	return ruleMatches, nil
 }
 
 // evaluateRules evaluates conditions for rules with matches, invokes the
@@ -254,11 +288,19 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 			continue
 		}
 
+		stringIndices := make([]int, 0, len(matchedStrings))
+		for idx := range matchedStrings {
+			stringIndices = append(stringIndices, idx)
+		}
+		slices.Sort(stringIndices)
+
 		strings := make([]MatchString, 0, len(matchedStrings))
-		for idx, infos := range matchedStrings {
+		for _, idx := range stringIndices {
 			name := cr.stringNames[idx]
-			for _, info := range infos {
-				strings = append(strings, MatchString{Name: name, Data: info.data})
+			for _, info := range matchedStrings[idx] {
+				data := make([]byte, info.len)
+				copy(data, buf[info.pos:info.pos+info.len])
+				strings = append(strings, MatchString{Name: name, Data: data})
 			}
 		}
 
@@ -286,11 +328,11 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 //
 // See scanfile_unix.go, scanfile_windows.go, and scanfile_js.go.
 
-func addMatch(m map[int]map[int][]matchInfo, ruleIdx int, stringIndex int, pos int, data []byte) {
+func addMatch(m map[int]map[int][]matchInfo, ruleIdx int, stringIndex int, pos int, length int) {
 	if m[ruleIdx] == nil {
 		m[ruleIdx] = make(map[int][]matchInfo)
 	}
-	m[ruleIdx][stringIndex] = append(m[ruleIdx][stringIndex], matchInfo{pos: pos, data: data})
+	m[ruleIdx][stringIndex] = append(m[ruleIdx][stringIndex], matchInfo{pos: pos, len: length})
 }
 
 // compiled returns the compiled Regexp, compiling it on first use.
