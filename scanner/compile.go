@@ -184,9 +184,10 @@ func compileRegex(rules *Rules, s *ast.StringDef, slot int32, ruleName string, a
 	}
 
 	rp := &regexPattern{
-		pattern: rePattern,
-		compile: opts.RegexCompiler,
-		slot:    slot,
+		pattern:  rePattern,
+		compile:  opts.RegexCompiler,
+		slot:     slot,
+		fullword: s.Modifiers.Fullword,
 	}
 	regexIdx := len(rules.regexPatterns)
 	rules.regexPatterns = append(rules.regexPatterns, rp)

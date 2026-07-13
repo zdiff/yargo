@@ -77,11 +77,12 @@ type (
 
 	// regexPattern holds a lazily compiled regex for complex regex matching.
 	regexPattern struct {
-		pattern string
-		compile CompileFunc
-		once    sync.Once
-		re      Regexp
-		slot    int32
+		pattern  string
+		compile  CompileFunc
+		once     sync.Once
+		re       Regexp
+		slot     int32
+		fullword bool
 	}
 
 	// compiledRule holds the compiled form of a single YARA rule.
@@ -95,7 +96,8 @@ type (
 
 	// hit records one confirmed match. Every string of every rule owns a
 	// distinct slot, and slots are handed out per rule in order, so sorting
-	// hits by slot groups them by rule and then by string in one pass.
+	// hits by slot groups them by rule and then by string in one pass. The
+	// matched bytes are only copied out of the buffer for rules that pass.
 	hit struct {
 		pos  int
 		slot int32
@@ -163,28 +165,45 @@ func checkWordBoundary(buf []byte, start, end int) bool {
 	return true
 }
 
-// ScanMem scans a byte buffer for matching rules.
+// ScanMem scans a byte buffer for matching rules. A timeout of zero or less
+// means no timeout.
 func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration, cb ScanCallback) error {
 	if r.matcher == nil && len(r.regexPatterns) == 0 {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
-	hits := r.collectMatches(buf)
+	hits, err := r.collectMatches(ctx, buf)
+	if err != nil {
+		return err
+	}
 	return r.evaluateRules(ctx, buf, hits, cb)
 }
 
+// ctxCheckInterval is how many AC matches (or regex verification windows)
+// are processed between context cancellation checks.
+const ctxCheckInterval = 4096
+
 // collectMatches runs AC matching and atom-based regex verification, returning
 // every hit sorted by slot (and so grouped by rule) and then by position.
-func (r *Rules) collectMatches(buf []byte) []hit {
+func (r *Rules) collectMatches(ctx context.Context, buf []byte) ([]hit, error) {
 	var hits []hit
 	var atoms []atomHit
 
 	if r.matcher != nil {
 		iter := r.matcher.IterOverlappingByte(buf)
+		steps := 0
 		for match := iter.Next(); match != nil; match = iter.Next() {
+			steps++
+			if steps%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			ref := r.patternMap[match.Pattern()]
 
 			// the automaton folds case when any nocase pattern exists, so
@@ -207,8 +226,11 @@ func (r *Rules) collectMatches(buf []byte) []hit {
 		}
 	}
 
-	hits = r.verifyAtoms(buf, atoms, hits)
-	return groupBySlot(hits)
+	hits, err := r.verifyAtoms(ctx, buf, atoms, hits)
+	if err != nil {
+		return nil, err
+	}
+	return groupBySlot(hits), nil
 }
 
 // countingSortMinHits is where a linear counting sort starts beating a
@@ -256,11 +278,11 @@ func groupBySlot(hits []hit) []hit {
 	return out
 }
 
-// verifyAtoms runs the full regex around each atom hit, appending the first
-// match found for each regex.
-func (r *Rules) verifyAtoms(buf []byte, atoms []atomHit, hits []hit) []hit {
+// verifyAtoms runs the full regex around each atom hit, appending every
+// distinct match it confirms.
+func (r *Rules) verifyAtoms(ctx context.Context, buf []byte, atoms []atomHit, hits []hit) ([]hit, error) {
 	if len(atoms) == 0 {
-		return hits
+		return hits, nil
 	}
 
 	// group by regex, and within a regex try candidate positions in order
@@ -272,6 +294,7 @@ func (r *Rules) verifyAtoms(buf []byte, atoms []atomHit, hits []hit) []hit {
 	})
 
 	halfWindow := maxMatchLen / 2
+	windows := 0
 	for i := 0; i < len(atoms); {
 		j := i
 		for j < len(atoms) && atoms[j].regexIdx == atoms[i].regexIdx {
@@ -286,24 +309,41 @@ func (r *Rules) verifyAtoms(buf []byte, atoms []atomHit, hits []hit) []hit {
 			continue
 		}
 
+		// Verify a window around every candidate position, recording each
+		// distinct match. Candidates inside an already verified match are
+		// skipped and windows start after it (non-overlapping, like RE2's
+		// FindAll), so the same match is never reported twice.
+		lastEnd := 0
 		for k, a := range group {
 			// different atoms of one regex can land on the same position
 			if k > 0 && a.pos == group[k-1].pos {
 				continue
 			}
-
-			start := max(0, a.pos-halfWindow)
+			if a.pos < lastEnd {
+				continue
+			}
+			windows++
+			if windows%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			start := max(max(0, a.pos-halfWindow), lastEnd)
 			end := min(len(buf), a.pos+halfWindow)
+
 			loc := recoverFindIndex(re, buf[start:end])
 			if loc == nil {
 				continue
 			}
-
-			hits = append(hits, hit{pos: start + loc[0], slot: rp.slot, n: int32(loc[1] - loc[0])})
-			break
+			matchStart := start + loc[0]
+			matchEnd := start + loc[1]
+			lastEnd = matchEnd
+			if rp.fullword && !checkWordBoundary(buf, matchStart, matchEnd) {
+				continue
+			}
+			hits = append(hits, hit{pos: matchStart, slot: rp.slot, n: int32(matchEnd - matchStart)})
 		}
 	}
-	return hits
+
+	return hits, nil
 }
 
 // evaluateRules evaluates conditions for rules with hits, invokes the
@@ -336,7 +376,9 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, hits []hit, cb Sc
 			continue
 		}
 
-		// only rules that actually match pay for copying their match data
+		// hits are grouped by slot, so strings come out ordered by string
+		// index and then by position. Only rules that actually match pay
+		// for copying their match data out of the buffer.
 		strings := make([]MatchString, len(ruleHits))
 		for k, h := range ruleHits {
 			strings[k] = MatchString{

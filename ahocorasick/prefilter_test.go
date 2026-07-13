@@ -202,6 +202,47 @@ func TestRareBytesBuilder_Build(t *testing.T) {
 	})
 }
 
+func TestRareBytesBuilder_OneRareBytePerPattern(t *testing.T) {
+	// Order the pattern commonest byte first so a rarer byte appears later:
+	// only the single rarest byte of the whole pattern may be added.
+	var common, rare byte
+	for i := range 256 {
+		b := byte(i)
+		if freqRank(b) > freqRank(common) {
+			common = b
+		}
+		if freqRank(b) < freqRank(rare) {
+			rare = b
+		}
+	}
+	pattern := []byte{common, common, rare}
+
+	b := newRareBytesBuilder()
+	b.add(pattern)
+
+	if b.count != 1 {
+		t.Fatalf("expected exactly 1 rare byte for a single pattern, got %d", b.count)
+	}
+	if !b.rareSet.contains(rare) {
+		t.Errorf("expected rare set to contain rarest byte %q", rare)
+	}
+	for i := range 256 {
+		if b.rareSet.contains(byte(i)) && byte(i) != rare {
+			t.Errorf("unexpected byte %q in rare set", byte(i))
+		}
+	}
+}
+
+func TestRareBytesBuilder_ExistingMemberNotReadded(t *testing.T) {
+	b := newRareBytesBuilder()
+	b.add([]byte("hello"))
+	b.add([]byte("hello"))
+
+	if b.count != 1 {
+		t.Errorf("expected repeated pattern to reuse its rare byte, got count %d", b.count)
+	}
+}
+
 func TestPrefilterState_IsEffective(t *testing.T) {
 	t.Run("effective when few skips", func(t *testing.T) {
 		state := &prefilterState{maxMatchLen: 1}

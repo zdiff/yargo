@@ -84,6 +84,48 @@ func Test_extractAtomsRejectsCommonKeywords(t *testing.T) {
 	}
 }
 
+func Test_extractAtomsUncoveredPatterns(t *testing.T) {
+	// Patterns where no atom set can cover every way the pattern matches must
+	// report no atoms, otherwise inputs matching only the uncovered part are
+	// silently missed.
+	tests := []struct {
+		name    string
+		pattern string
+	}{
+		{"common token branch", `return|malwarefunc`},
+		{"short branch", `ab|cdef`},
+		{"short branch in group", `(ab|cdef)`},
+		{"optional group only", `(abc)?`},
+		{"uncovered group without outside literal", `(return|malwarefunc)`},
+		{"empty branch", `foo|`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			atoms, ok := extractAtoms(tt.pattern, minAtomLength)
+			if ok {
+				t.Errorf("extractAtoms(%q) = %q, want no atoms", tt.pattern, atoms)
+			}
+		})
+	}
+}
+
+func Test_extractAtomsNonCapturingAlternation(t *testing.T) {
+	atoms, ok := extractAtoms(`(?:foo|barbaz)`, minAtomLength)
+	if !ok {
+		t.Fatal("expected atoms to be extracted")
+	}
+	found := make(map[string]bool)
+	for _, a := range atoms {
+		found[string(a)] = true
+	}
+	if !found["foo"] || !found["barbaz"] {
+		t.Errorf("expected atoms 'foo' and 'barbaz', got %v", found)
+	}
+	if found[":foo"] {
+		t.Errorf("group prefix leaked into atom: %v", found)
+	}
+}
+
 func TestAtomQuality(t *testing.T) {
 	tests := []struct {
 		name   string

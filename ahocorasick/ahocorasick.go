@@ -123,7 +123,7 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 	sid := *sID
 	for at < len(haystack) {
 		if pf != nil {
-			if prestate.IsEffective(at) && sID == &a.startID {
+			if prestate.IsEffective(at) && sid == a.startID {
 				c := nextPrefilter(prestate, pf, haystack, at)
 				if c == noneCandidate {
 					*sID = sid

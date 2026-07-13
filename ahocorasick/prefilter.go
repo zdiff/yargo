@@ -151,16 +151,17 @@ func (r *rareBytesBuilder) add(bytes []byte) {
 		}
 		if r.rareSet.contains(b) {
 			found = true
+			continue
 		}
 		rank := freqRank(b)
 		if rank < rarest2 {
 			rarest1 = b
 			rarest2 = rank
 		}
+	}
 
-		if !found {
-			r.addRareByte(rarest1)
-		}
+	if !found {
+		r.addRareByte(rarest1)
 	}
 }
 

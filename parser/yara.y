@@ -225,11 +225,19 @@ hex_token:
 	}
 	| HEX_JUMP
 	{
-		$$ = parseHexJump($1)
+		jump, err := parseHexJump($1)
+		if err != nil {
+			yylex.Error(err.Error())
+		}
+		$$ = jump
 	}
 	| HEX_ALT
 	{
-		$$ = parseHexAlt($1)
+		alt, err := parseHexAlt($1)
+		if err != nil {
+			yylex.Error(err.Error())
+		}
+		$$ = alt
 	}
 	;
 
