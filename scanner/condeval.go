@@ -1,7 +1,9 @@
 package scanner
 
 import (
+	"cmp"
 	"encoding/binary"
+	"slices"
 	"strings"
 
 	"github.com/sansecio/yargo/ast"
@@ -9,9 +11,32 @@ import (
 
 // evalContext holds the context for evaluating a condition.
 type evalContext struct {
-	matches     map[int][]int // string index -> list of match positions
-	buf         []byte        // the buffer being scanned
-	stringNames []string      // all string names defined in the rule
+	hits        []hit    // this rule's hits, sorted by slot then position
+	slotBase    int32    // slot of the rule's first string
+	buf         []byte   // the buffer being scanned
+	stringNames []string // all string names defined in the rule
+}
+
+// hitsFor returns the hits for the given string index. They are contiguous
+// because the rule's hits are sorted by slot.
+func (ctx *evalContext) hitsFor(idx int) []hit {
+	slot := ctx.slotBase + int32(idx)
+	lo, ok := slices.BinarySearchFunc(ctx.hits, slot, func(h hit, s int32) int {
+		return cmp.Compare(h.slot, s)
+	})
+	if !ok {
+		return nil
+	}
+	hi := lo
+	for hi < len(ctx.hits) && ctx.hits[hi].slot == slot {
+		hi++
+	}
+	return ctx.hits[lo:hi]
+}
+
+// matched reports whether the string at idx hit anywhere.
+func (ctx *evalContext) matched(idx int) bool {
+	return len(ctx.hitsFor(idx)) > 0
 }
 
 // evalExpr evaluates a condition expression and returns true if it matches.
@@ -22,21 +47,16 @@ func evalExpr(expr ast.Expr, ctx *evalContext) bool {
 		if idx < 0 {
 			return false
 		}
-		_, ok := ctx.matches[idx]
-		return ok
+		return ctx.matched(idx)
 
 	case ast.AtExpr:
 		idx := ctx.stringIndex(e.Ref.Name)
 		if idx < 0 {
 			return false
 		}
-		positions, ok := ctx.matches[idx]
-		if !ok {
-			return false
-		}
 		pos := evalExprInt(e.Pos, ctx)
-		for _, p := range positions {
-			if int64(p) == pos {
+		for _, h := range ctx.hitsFor(idx) {
+			if int64(h.pos) == pos {
 				return true
 			}
 		}
@@ -147,7 +167,7 @@ func (ctx *evalContext) stringIndex(name string) int {
 // evalAnyOf evaluates "any of" expressions.
 func evalAnyOf(e ast.AnyOf, ctx *evalContext) bool {
 	for _, idx := range matchingStringIndices(e.Pattern, ctx.stringNames) {
-		if _, ok := ctx.matches[idx]; ok {
+		if ctx.matched(idx) {
 			return true
 		}
 	}
@@ -161,7 +181,7 @@ func evalAllOf(e ast.AllOf, ctx *evalContext) bool {
 		return false
 	}
 	for _, idx := range indices {
-		if _, ok := ctx.matches[idx]; !ok {
+		if !ctx.matched(idx) {
 			return false
 		}
 	}

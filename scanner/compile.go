@@ -80,20 +80,24 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 			name:      r.Name,
 			metas:     make([]Meta, len(r.Meta)),
 			condition: r.Condition,
+			slotBase:  int32(len(rules.slotRule)),
 		}
 		for i, m := range r.Meta {
 			cr.metas[i] = Meta{Identifier: m.Key, Value: m.Value}
 		}
 		for _, s := range r.Strings {
 			cr.stringNames = append(cr.stringNames, s.Name)
+			rules.slotRule = append(rules.slotRule, int32(ruleIdx))
 		}
 		rules.rules = append(rules.rules, cr)
 
 		for si, s := range r.Strings {
+			slot := cr.slotBase + int32(si)
+
 			patterns, isRegex := generatePatterns(s)
 			if isRegex {
 				var err error
-				allPatterns, err = compileRegex(rules, s, si, r.Name, ruleIdx, allPatterns, opts)
+				allPatterns, err = compileRegex(rules, s, slot, r.Name, allPatterns, opts)
 				if err != nil {
 					errs = append(errs, err)
 				}
@@ -101,11 +105,10 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 			}
 			for _, p := range patterns {
 				rules.patternMap = append(rules.patternMap, patternRef{
-					ruleIndex:   ruleIdx,
-					stringIndex: si,
-					fullword:    s.Modifiers.Fullword,
-					verify:      !s.Modifiers.Nocase && hasASCIILetter(p),
-					regexIdx:    -1,
+					slot:     slot,
+					fullword: s.Modifiers.Fullword,
+					verify:   !s.Modifiers.Nocase && hasASCIILetter(p),
+					regexIdx: -1,
 				})
 				allPatterns = append(allPatterns, p)
 				if s.Modifiers.Nocase {
@@ -153,7 +156,7 @@ func hasASCIILetter(p []byte) bool {
 	return false
 }
 
-func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName string, ruleIdx int, allPatterns [][]byte, opts CompileOptions) ([][]byte, error) {
+func compileRegex(rules *Rules, s *ast.StringDef, slot int32, ruleName string, allPatterns [][]byte, opts CompileOptions) ([][]byte, error) {
 	var rePattern string
 	var caseInsensitive bool
 
@@ -181,10 +184,9 @@ func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName stri
 	}
 
 	rp := &regexPattern{
-		pattern:     rePattern,
-		compile:     opts.RegexCompiler,
-		ruleIndex:   ruleIdx,
-		stringIndex: stringIndex,
+		pattern: rePattern,
+		compile: opts.RegexCompiler,
+		slot:    slot,
 	}
 	regexIdx := len(rules.regexPatterns)
 	rules.regexPatterns = append(rules.regexPatterns, rp)

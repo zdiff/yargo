@@ -87,17 +87,19 @@ func (n *iNFA) MaxPatternLen() int {
 	return n.maxPatternLen
 }
 
-func (n *iNFA) GetMatch(id stateID, matchIndex int, end int) *Match {
+// getMatch writes the match at matchIndex into dst, reporting whether one
+// exists. It fills a caller-owned Match so that scanning a haystack with many
+// hits does not allocate once per hit.
+func (n *iNFA) getMatch(id stateID, matchIndex int, end int, dst *Match) bool {
 	m := n.matches[id]
 	if matchIndex >= len(m) {
-		return nil
+		return false
 	}
 	pat := m[matchIndex]
-	return &Match{
-		pattern: pat.PatternID,
-		len:     pat.PatternLength,
-		end:     end,
-	}
+	dst.pattern = pat.PatternID
+	dst.len = pat.PatternLength
+	dst.end = end
+	return true
 }
 
 func (n *iNFA) addMatch(id stateID, patternID, patternLength int) {

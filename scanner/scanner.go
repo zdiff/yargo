@@ -3,6 +3,7 @@ package scanner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -60,28 +61,27 @@ type (
 		matcher       *ahocorasick.AhoCorasick
 		patterns      [][]byte
 		patternMap    []patternRef
+		slotRule      []int32 // string slot -> rule index
 		regexPatterns []*regexPattern
 	}
 )
 
 type (
-	// patternRef maps a pattern index back to its source rule and string.
+	// patternRef maps a pattern index back to the string slot it belongs to.
 	patternRef struct {
-		ruleIndex   int
-		stringIndex int
-		fullword    bool
-		verify      bool // confirm the hit against the original buffer (case-folded scan)
-		regexIdx    int
+		slot     int32
+		fullword bool
+		verify   bool // confirm the hit against the original buffer (case-folded scan)
+		regexIdx int
 	}
 
 	// regexPattern holds a lazily compiled regex for complex regex matching.
 	regexPattern struct {
-		pattern     string
-		compile     CompileFunc
-		once        sync.Once
-		re          Regexp
-		ruleIndex   int
-		stringIndex int
+		pattern string
+		compile CompileFunc
+		once    sync.Once
+		re      Regexp
+		slot    int32
 	}
 
 	// compiledRule holds the compiled form of a single YARA rule.
@@ -90,12 +90,22 @@ type (
 		metas       []Meta
 		condition   ast.Expr
 		stringNames []string
+		slotBase    int32 // slot of this rule's first string
 	}
 
-	// matchInfo records the position and data of a single pattern match.
-	matchInfo struct {
+	// hit records one confirmed match. Every string of every rule owns a
+	// distinct slot, and slots are handed out per rule in order, so sorting
+	// hits by slot groups them by rule and then by string in one pass.
+	hit struct {
 		pos  int
-		data []byte
+		slot int32
+		n    int32
+	}
+
+	// atomHit records a regex atom hit, to be verified against the full regex.
+	atomHit struct {
+		pos      int
+		regexIdx int32
 	}
 )
 
@@ -162,15 +172,15 @@ func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration, cb S
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	ruleMatches := r.collectMatches(buf)
-	return r.evaluateRules(ctx, buf, ruleMatches, cb)
+	hits := r.collectMatches(buf)
+	return r.evaluateRules(ctx, buf, hits, cb)
 }
 
-// collectMatches runs AC matching, atom-based regex verification, and full-scan
-// regex to collect all match positions per rule and string index.
-func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
-	ruleMatches := make(map[int]map[int][]matchInfo)
-	atomCandidates := make(map[int][]int)
+// collectMatches runs AC matching and atom-based regex verification, returning
+// every hit sorted by slot (and so grouped by rule) and then by position.
+func (r *Rules) collectMatches(buf []byte) []hit {
+	var hits []hit
+	var atoms []atomHit
 
 	if r.matcher != nil {
 		iter := r.matcher.IterOverlappingByte(buf)
@@ -185,7 +195,7 @@ func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
 			}
 
 			if ref.regexIdx >= 0 {
-				atomCandidates[ref.regexIdx] = append(atomCandidates[ref.regexIdx], match.Start())
+				atoms = append(atoms, atomHit{pos: match.Start(), regexIdx: int32(ref.regexIdx)})
 				continue
 			}
 
@@ -193,50 +203,118 @@ func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
 				continue
 			}
 
-			data := make([]byte, match.End()-match.Start())
-			copy(data, buf[match.Start():match.End()])
-			addMatch(ruleMatches, ref.ruleIndex, ref.stringIndex, match.Start(), data)
+			hits = append(hits, hit{pos: match.Start(), slot: ref.slot, n: int32(match.End() - match.Start())})
 		}
 	}
 
+	hits = r.verifyAtoms(buf, atoms, hits)
+	return groupBySlot(hits)
+}
+
+// countingSortMinHits is where a linear counting sort starts beating a
+// comparison sort, given the counts array it has to allocate.
+const countingSortMinHits = 64
+
+// groupBySlot arranges hits so that each slot's hits are contiguous, which
+// also makes each rule's hits contiguous. It is stable, so hits keep the
+// ascending position order the automaton produced them in.
+func groupBySlot(hits []hit) []hit {
+	if len(hits) < 2 {
+		return hits
+	}
+
+	if len(hits) < countingSortMinHits {
+		slices.SortStableFunc(hits, func(a, b hit) int { return cmp.Compare(a.slot, b.slot) })
+		return hits
+	}
+
+	// size the counts array to the range of slots actually hit, which is
+	// usually far smaller than the total number of slots in the ruleset
+	lo, hi := hits[0].slot, hits[0].slot
+	for _, h := range hits {
+		lo = min(lo, h.slot)
+		hi = max(hi, h.slot)
+	}
+
+	counts := make([]int32, hi-lo+2)
+	for _, h := range hits {
+		counts[h.slot-lo+1]++
+	}
+	for i := 1; i < len(counts); i++ {
+		counts[i] += counts[i-1]
+	}
+
+	out := make([]hit, len(hits))
+	for _, h := range hits {
+		out[counts[h.slot-lo]] = h
+		counts[h.slot-lo]++
+	}
+	return out
+}
+
+// verifyAtoms runs the full regex around each atom hit, appending the first
+// match found for each regex.
+func (r *Rules) verifyAtoms(buf []byte, atoms []atomHit, hits []hit) []hit {
+	if len(atoms) == 0 {
+		return hits
+	}
+
+	// group by regex, and within a regex try candidate positions in order
+	slices.SortFunc(atoms, func(a, b atomHit) int {
+		if a.regexIdx != b.regexIdx {
+			return cmp.Compare(a.regexIdx, b.regexIdx)
+		}
+		return cmp.Compare(a.pos, b.pos)
+	})
+
 	halfWindow := maxMatchLen / 2
-	for regexIdx, positions := range atomCandidates {
-		rp := r.regexPatterns[regexIdx]
+	for i := 0; i < len(atoms); {
+		j := i
+		for j < len(atoms) && atoms[j].regexIdx == atoms[i].regexIdx {
+			j++
+		}
+		group := atoms[i:j]
+		i = j
+
+		rp := r.regexPatterns[group[0].regexIdx]
 		re := rp.compiled()
 		if re == nil {
 			continue
 		}
-		positions = dedupe(positions)
 
-		for _, pos := range positions {
-			start := max(0, pos-halfWindow)
-			end := min(len(buf), pos+halfWindow)
-
-			if loc := recoverFindIndex(re, buf[start:end]); loc != nil {
-				matchStart := start + loc[0]
-				matchEnd := start + loc[1]
-				data := make([]byte, matchEnd-matchStart)
-				copy(data, buf[matchStart:matchEnd])
-				addMatch(ruleMatches, rp.ruleIndex, rp.stringIndex, matchStart, data)
-				break
+		for k, a := range group {
+			// different atoms of one regex can land on the same position
+			if k > 0 && a.pos == group[k-1].pos {
+				continue
 			}
+
+			start := max(0, a.pos-halfWindow)
+			end := min(len(buf), a.pos+halfWindow)
+			loc := recoverFindIndex(re, buf[start:end])
+			if loc == nil {
+				continue
+			}
+
+			hits = append(hits, hit{pos: start + loc[0], slot: rp.slot, n: int32(loc[1] - loc[0])})
+			break
 		}
 	}
-
-	return ruleMatches
+	return hits
 }
 
-// evaluateRules evaluates conditions for rules with matches, invokes the
+// evaluateRules evaluates conditions for rules with hits, invokes the
 // callback for matching rules, and handles abort/timeout.
-func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[int]map[int][]matchInfo, cb ScanCallback) error {
-	ruleIndices := make([]int, 0, len(ruleMatches))
-	for ruleIdx := range ruleMatches {
-		ruleIndices = append(ruleIndices, ruleIdx)
-	}
-	slices.Sort(ruleIndices)
+func (r *Rules) evaluateRules(ctx context.Context, buf []byte, hits []hit, cb ScanCallback) error {
+	// hits are sorted by slot, so each rule owns one contiguous run
+	for i := 0; i < len(hits); {
+		ruleIdx := r.slotRule[hits[i].slot]
+		j := i
+		for j < len(hits) && r.slotRule[hits[j].slot] == ruleIdx {
+			j++
+		}
+		ruleHits := hits[i:j]
+		i = j
 
-	for _, ruleIdx := range ruleIndices {
-		matchedStrings := ruleMatches[ruleIdx]
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -244,18 +322,9 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 		}
 
 		cr := r.rules[ruleIdx]
-
-		matchPositions := make(map[int][]int, len(matchedStrings))
-		for idx, infos := range matchedStrings {
-			positions := make([]int, len(infos))
-			for i, info := range infos {
-				positions[i] = info.pos
-			}
-			matchPositions[idx] = positions
-		}
-
 		evalCtx := &evalContext{
-			matches:     matchPositions,
+			hits:        ruleHits,
+			slotBase:    cr.slotBase,
 			buf:         buf,
 			stringNames: cr.stringNames,
 		}
@@ -263,11 +332,12 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 			continue
 		}
 
-		strings := make([]MatchString, 0, len(matchedStrings))
-		for idx, infos := range matchedStrings {
-			name := cr.stringNames[idx]
-			for _, info := range infos {
-				strings = append(strings, MatchString{Name: name, Data: info.data})
+		// only rules that actually match pay for copying their match data
+		strings := make([]MatchString, len(ruleHits))
+		for k, h := range ruleHits {
+			strings[k] = MatchString{
+				Name: cr.stringNames[h.slot-cr.slotBase],
+				Data: bytes.Clone(buf[h.pos : h.pos+int(h.n)]),
 			}
 		}
 
@@ -295,13 +365,6 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 //
 // See scanfile_unix.go, scanfile_windows.go, and scanfile_js.go.
 
-func addMatch(m map[int]map[int][]matchInfo, ruleIdx int, stringIndex int, pos int, data []byte) {
-	if m[ruleIdx] == nil {
-		m[ruleIdx] = make(map[int][]matchInfo)
-	}
-	m[ruleIdx][stringIndex] = append(m[ruleIdx][stringIndex], matchInfo{pos: pos, data: data})
-}
-
 // compiled returns the compiled Regexp, compiling it on first use.
 // If compilation fails, it returns nil.
 func (rp *regexPattern) compiled() Regexp {
@@ -324,19 +387,4 @@ func recoverFindIndex(re Regexp, b []byte) (loc []int) {
 		}
 	}()
 	return re.FindIndex(b)
-}
-
-func dedupe(positions []int) []int {
-	if len(positions) <= 1 {
-		return positions
-	}
-	slices.Sort(positions)
-	j := 1
-	for i := 1; i < len(positions); i++ {
-		if positions[i] != positions[j-1] {
-			positions[j] = positions[i]
-			j++
-		}
-	}
-	return positions[:j]
 }

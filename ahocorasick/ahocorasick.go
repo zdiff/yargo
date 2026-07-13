@@ -7,22 +7,23 @@ type overlappingIter struct {
 	pos        int
 	stateID    stateID
 	matchIndex int
+	match      Match
 }
 
-// Next gives a pointer to the next match yielded by the iterator or nil, if there is none.
+// Next gives a pointer to the next match yielded by the iterator or nil, if
+// there is none. The Match is owned by the iterator and is overwritten by the
+// following call to Next, so copy it if you need to keep it.
 func (f *overlappingIter) Next() *Match {
 	if f.pos > len(f.haystack) {
 		return nil
 	}
 
-	result := overlappingFindAt(f.fsm, f.prestate, f.haystack, f.pos, &f.stateID, &f.matchIndex)
-
-	if result == nil {
+	if !overlappingFindAt(f.fsm, f.prestate, f.haystack, f.pos, &f.stateID, &f.matchIndex, &f.match) {
 		return nil
 	}
 
-	f.pos = result.End()
-	return result
+	f.pos = f.match.End()
+	return &f.match
 }
 
 func newOverlappingIter(ac AhoCorasick, haystack []byte) overlappingIter {
@@ -114,11 +115,11 @@ const (
 	deadStateID   stateID = 1
 )
 
-func standardFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at int, sID *stateID) *Match {
-	return standardFindAtImp(a, prestate, a.prefil, haystack, at, sID)
+func standardFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at int, sID *stateID, dst *Match) bool {
+	return standardFindAtImp(a, prestate, a.prefil, haystack, at, sID, dst)
 }
 
-func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystack []byte, at int, sID *stateID) *Match {
+func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystack []byte, at int, sID *stateID, dst *Match) bool {
 	sid := *sID
 	for at < len(haystack) {
 		if pf != nil {
@@ -126,7 +127,7 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 				c := nextPrefilter(prestate, pf, haystack, at)
 				if c == noneCandidate {
 					*sID = sid
-					return nil
+					return false
 				} else {
 					at = c
 				}
@@ -142,35 +143,32 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 		if sid == deadStateID || a.hasMatch(sid) {
 			*sID = sid
 			if sid == deadStateID {
-				return nil
+				return false
 			}
-			return a.GetMatch(sid, 0, at)
+			return a.getMatch(sid, 0, at, dst)
 		}
 	}
 	*sID = sid
-	return nil
+	return false
 }
 
-func overlappingFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at int, id *stateID, matchIndex *int) *Match {
+func overlappingFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at int, id *stateID, matchIndex *int, dst *Match) bool {
 	if a.anchored && at > 0 && *id == a.startID {
-		return nil
+		return false
 	}
 
-	matchCount := len(a.matches[*id])
-
-	if *matchIndex < matchCount {
-		result := a.GetMatch(*id, *matchIndex, at)
+	// the bitset check keeps non-matching states out of the matches map
+	if a.hasMatch(*id) && *matchIndex < len(a.matches[*id]) {
+		ok := a.getMatch(*id, *matchIndex, at, dst)
 		*matchIndex += 1
-		return result
+		return ok
 	}
 
 	*matchIndex = 0
-	match := standardFindAt(a, prestate, haystack, at, id)
-
-	if match == nil {
-		return nil
+	if !standardFindAt(a, prestate, haystack, at, id, dst) {
+		return false
 	}
 
 	*matchIndex = 1
-	return match
+	return true
 }
