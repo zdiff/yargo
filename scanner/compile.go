@@ -55,6 +55,7 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 
 	var allPatterns [][]byte
 	var errs []error
+	var hasNocase bool
 	ruleIdx := 0
 
 	skipSubtypes := make(map[string]bool, len(opts.SkipSubtypes))
@@ -103,12 +104,12 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 					ruleIndex:   ruleIdx,
 					stringIndex: si,
 					fullword:    s.Modifiers.Fullword,
-					nocase:      s.Modifiers.Nocase,
+					verify:      !s.Modifiers.Nocase && hasASCIILetter(p),
 					regexIdx:    -1,
 				})
 				allPatterns = append(allPatterns, p)
 				if s.Modifiers.Nocase {
-					rules.hasNocase = true
+					hasNocase = true
 				}
 			}
 		}
@@ -119,25 +120,37 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 		return nil, errors.Join(errs...)
 	}
 
-	if rules.hasNocase {
-		// keep originals for case-sensitive verification during scan,
-		// then lowercase all patterns so a single AC pass on a lowercased
-		// buffer finds both case-sensitive and nocase matches
-		rules.origPatterns = make([][]byte, len(allPatterns))
-		copy(rules.origPatterns, allPatterns)
-		for i, p := range allPatterns {
-			allPatterns[i] = toLowerASCII(p)
+	if !hasNocase {
+		// without nocase patterns the automaton matches exactly, so no
+		// hit ever needs verifying against the original buffer
+		for i := range rules.patternMap {
+			rules.patternMap[i].verify = false
 		}
 	}
 
 	rules.patterns = allPatterns
 	if len(allPatterns) > 0 {
 		builder := ahocorasick.NewAhoCorasickBuilder()
+		// one case-folding pass over the buffer finds both nocase and
+		// case-sensitive hits; the latter are verified during the scan
+		builder.AsciiCaseFold(hasNocase)
 		ac := builder.BuildByte(allPatterns)
 		rules.matcher = &ac
 	}
 
 	return rules, nil
+}
+
+// hasASCIILetter reports whether folding can make p match bytes it otherwise
+// would not. Only A-Z/a-z fold, so a pattern without them never needs
+// verification against the original buffer.
+func hasASCIILetter(p []byte) bool {
+	for _, b := range p {
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') {
+			return true
+		}
+	}
+	return false
 }
 
 func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName string, ruleIdx int, allPatterns [][]byte, opts CompileOptions) ([][]byte, error) {
@@ -146,6 +159,10 @@ func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName stri
 
 	switch v := s.Value.(type) {
 	case ast.RegexString:
+		// on a regex, nocase means the same as the i flag
+		if s.Modifiers.Nocase {
+			v.Modifiers.CaseInsensitive = true
+		}
 		rePattern = buildRE2Pattern(v.Pattern, v.Modifiers)
 		caseInsensitive = v.Modifiers.CaseInsensitive
 	case ast.HexString:
@@ -172,9 +189,12 @@ func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName stri
 	regexIdx := len(rules.regexPatterns)
 	rules.regexPatterns = append(rules.regexPatterns, rp)
 
+	// a case-insensitive regex always requires a full scan (see above), so
+	// every atom that reaches here belongs to a case-sensitive regex
 	for _, atom := range atoms {
 		rules.patternMap = append(rules.patternMap, patternRef{
 			regexIdx: regexIdx,
+			verify:   hasASCIILetter(atom),
 		})
 		allPatterns = append(allPatterns, atom)
 	}

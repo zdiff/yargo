@@ -2194,3 +2194,86 @@ func TestScanFileMatchesScanMem(t *testing.T) {
 		}
 	}
 }
+
+func TestNocaseRegexRequiresFullScan(t *testing.T) {
+	// nocase on a regex means the same as the i flag, which yargo cannot
+	// prefilter with atoms — it must be reported, not silently under-matched
+	rule := `rule r {
+		strings:
+			$a = /foo[0-9]+/ nocase
+		condition: $a
+	}`
+	rs, err := parser.New().Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if _, err := Compile(rs); err == nil {
+		t.Fatal("Compile() should reject a nocase regex, got nil error")
+	}
+
+	if _, err := CompileWithOptions(rs, CompileOptions{SkipInvalidRegex: true}); err != nil {
+		t.Fatalf("CompileWithOptions() error = %v", err)
+	}
+}
+
+// When any nocase string exists the automaton folds case, so every
+// case-sensitive pattern must be confirmed against the original buffer.
+func TestNocaseDoesNotLeakIntoOtherPatternTypes(t *testing.T) {
+	rule := `rule folded {
+		strings:
+			$n = "password" nocase
+		condition: $n
+	}
+	rule hex_rule {
+		strings:
+			$h = { 41 42 43 44 }
+		condition: $h
+	}
+	rule regex_rule {
+		strings:
+			$r = /Payload[0-9]+/
+		condition: $r
+	}
+	rule binary_rule {
+		strings:
+			$b = { 01 02 03 04 }
+		condition: $b
+	}`
+	rs, err := parser.New().Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data string
+		want []string
+	}{
+		{"lowercased hex and regex must not match", "abcd payload42", nil},
+		{"exact case hex and regex match", "ABCD Payload42", []string{"hex_rule", "regex_rule"}},
+		{"nocase string still folds", "PaSsWoRd", []string{"folded"}},
+		{"letterless binary pattern is unaffected", "\x01\x02\x03\x04", []string{"binary_rule"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			if err := rules.ScanMem([]byte(tt.data), 0, time.Second, &matches); err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := make([]string, len(matches))
+			for i, m := range matches {
+				got[i] = m.Rule
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("scanning %q matched %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}

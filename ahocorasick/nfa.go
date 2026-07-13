@@ -5,10 +5,20 @@ type iNFA struct {
 	maxPatternLen int
 	prefil        *prefilter
 	anchored      bool
+	fold          bool
 	states        []state
 	denseTable    []stateID
 	matches       map[stateID][]pattern
 	matchBitset   []uint64
+}
+
+// foldByte lowers ASCII A-Z. It never changes the byte's width, so match
+// offsets stay valid for binary and Latin-1 haystacks.
+func foldByte(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + 0x20
+	}
+	return b
 }
 
 func (n *iNFA) hasMatch(id stateID) bool {
@@ -160,6 +170,11 @@ func (c *compiler) compile(patterns [][]byte) *iNFA {
 
 	if !c.builder.anchored {
 		c.nfa.prefil = c.prefilter.build()
+		if c.nfa.prefil != nil {
+			// the prefilter was built from folded patterns, so it must
+			// fold the haystack as it scans for candidates
+			c.nfa.prefil.fold = c.builder.fold
+		}
 	}
 
 	c.nfa.matchBitset = make([]uint64, (len(c.nfa.states)+63)/64)
@@ -376,6 +391,7 @@ func newCompiler(builder iNFABuilder) compiler {
 			maxPatternLen: 0,
 			prefil:        nil,
 			anchored:      builder.anchored,
+			fold:          builder.fold,
 			matches:       make(map[stateID][]pattern),
 		},
 	}
@@ -385,6 +401,7 @@ type iNFABuilder struct {
 	denseDepth int
 	prefilter  bool
 	anchored   bool
+	fold       bool
 }
 
 func newNFABuilder() *iNFABuilder {
@@ -396,8 +413,23 @@ func newNFABuilder() *iNFABuilder {
 }
 
 func (b *iNFABuilder) build(patterns [][]byte) *iNFA {
+	if b.fold {
+		patterns = foldPatterns(patterns)
+	}
 	c := newCompiler(*b)
 	return c.compile(patterns)
+}
+
+func foldPatterns(patterns [][]byte) [][]byte {
+	folded := make([][]byte, len(patterns))
+	for i, p := range patterns {
+		f := make([]byte, len(p))
+		for j, b := range p {
+			f[j] = foldByte(b)
+		}
+		folded[i] = f
+	}
+	return folded
 }
 
 type pattern struct {

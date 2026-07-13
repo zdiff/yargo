@@ -66,6 +66,14 @@ func NewAhoCorasickBuilder() AhoCorasickBuilder {
 	}
 }
 
+// AsciiCaseFold makes the automaton match case-insensitively over ASCII A-Z.
+// Patterns are folded when the automaton is built and the haystack is folded
+// as it is scanned, so no copy of the haystack is needed and match offsets
+// still refer to the original bytes.
+func (a *AhoCorasickBuilder) AsciiCaseFold(fold bool) {
+	a.nfaBuilder.fold = fold
+}
+
 // BuildByte builds an automaton from the user provided patterns.
 func (a *AhoCorasickBuilder) BuildByte(patterns [][]byte) AhoCorasick {
 	nfa := a.nfaBuilder.build(patterns)
@@ -124,7 +132,11 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 				}
 			}
 		}
-		sid = a.NextStateNoFail(sid, haystack[at])
+		b := haystack[at]
+		if a.fold {
+			b = foldByte(b)
+		}
+		sid = a.NextStateNoFail(sid, b)
 		at += 1
 
 		if sid == deadStateID || a.hasMatch(sid) {
