@@ -215,6 +215,11 @@ func (r *Rules) collectMatches(buf []byte) []hit {
 // comparison sort, given the counts array it has to allocate.
 const countingSortMinHits = 64
 
+// countingSortMaxSpread caps how much wider than the hit count the counts
+// array may get. A big ruleset spans a huge slot range, and zeroing an array
+// that dwarfs the hits costs far more than just comparing them.
+const countingSortMaxSpread = 8
+
 // groupBySlot arranges hits so that each slot's hits are contiguous, which
 // also makes each rule's hits contiguous. It is stable, so hits keep the
 // ascending position order the automaton produced them in.
@@ -223,20 +228,19 @@ func groupBySlot(hits []hit) []hit {
 		return hits
 	}
 
-	if len(hits) < countingSortMinHits {
-		slices.SortStableFunc(hits, func(a, b hit) int { return cmp.Compare(a.slot, b.slot) })
-		return hits
-	}
-
-	// size the counts array to the range of slots actually hit, which is
-	// usually far smaller than the total number of slots in the ruleset
 	lo, hi := hits[0].slot, hits[0].slot
 	for _, h := range hits {
 		lo = min(lo, h.slot)
 		hi = max(hi, h.slot)
 	}
+	span := int(hi-lo) + 2
 
-	counts := make([]int32, hi-lo+2)
+	if len(hits) < countingSortMinHits || span > countingSortMaxSpread*len(hits) {
+		slices.SortStableFunc(hits, func(a, b hit) int { return cmp.Compare(a.slot, b.slot) })
+		return hits
+	}
+
+	counts := make([]int32, span)
 	for _, h := range hits {
 		counts[h.slot-lo+1]++
 	}
