@@ -388,6 +388,52 @@ func TestZeroTimeoutMeansNoTimeout(t *testing.T) {
 	}
 }
 
+func TestCompileSkipsUnsupportedModifierRules(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule widerule {
+	strings:
+		$a = "needle" wide
+	condition:
+		any of them
+}
+
+rule xorrule {
+	strings:
+		$a = "needle"
+		$b = "other" xor(0x01-0xff)
+	condition:
+		any of them
+}
+
+rule plain {
+	strings:
+		$a = "needle"
+	condition:
+		any of them
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if got := rules.NumRules(); got != 1 {
+		t.Errorf("expected 1 compiled rule, got %d", got)
+	}
+
+	// a rule with an unsupported modifier must not match at all, even via
+	// its supported strings: honoring only part of the rule could flip
+	// negated conditions and cause false positives
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("some needle here"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 || matches[0].Rule != "plain" {
+		t.Errorf("expected only rule plain to match, got %v", matches)
+	}
+}
+
 func TestRegexFullword(t *testing.T) {
 	rs, err := parser.New().Parse(`rule fw { strings: $re = /abc[0-9]+/ fullword condition: any of them }`)
 	if err != nil {

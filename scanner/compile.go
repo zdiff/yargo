@@ -66,7 +66,7 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 	}
 
 	for _, r := range rs.Rules {
-		if r.Condition == nil {
+		if r.Condition == nil || hasUnsupportedModifier(r) {
 			continue
 		}
 
@@ -142,6 +142,19 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 	}
 
 	return rules, nil
+}
+
+// hasUnsupportedModifier reports whether any of the rule's strings carries a
+// modifier the scanner cannot honor. Such rules are skipped entirely: matching
+// only the honorable strings could flip negated conditions and cause false
+// positives, and matching without a modifier like xor would be plain wrong.
+func hasUnsupportedModifier(r *ast.Rule) bool {
+	for _, s := range r.Strings {
+		if len(s.Modifiers.Unsupported) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // hasASCIILetter reports whether folding can make p match bytes it otherwise

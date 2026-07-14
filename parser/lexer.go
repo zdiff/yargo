@@ -282,23 +282,68 @@ func (l *yaraLexer) lexStringValue(lval *yySymType) int {
 	}
 
 	if isAlpha(ch) {
+		start := l.pos
 		word := l.readIdent()
-		switch word {
-		case "base64", "base64wide", "fullword", "wide", "ascii", "nocase", "xor", "private":
-			lval.str = word
-			return MODIFIER
-		default:
-			// Not a modifier — this belongs to the next section.
-			// Put the word back and pop mode.
-			l.pos -= len(word)
+		if l.aheadIsColon() {
+			// a section keyword like "condition:", not a modifier —
+			// put the word back and pop mode
+			l.pos = start
 			l.popMode()
 			return l.Lex(lval)
 		}
+		// any other identifier is a modifier, known or not; the grammar
+		// warns about the ones the scanner cannot honor
+		lval.str = word + l.readModifierArgs()
+		return MODIFIER
 	}
 
 	// Any other character means the string value + modifiers are done
 	l.popMode()
 	return l.Lex(lval)
+}
+
+// aheadIsColon reports whether the next token is a colon, without consuming
+// anything. It distinguishes a section keyword from a string modifier.
+func (l *yaraLexer) aheadIsColon() bool {
+	save := l.pos
+	for l.skipWhitespace() || l.skipComment() {
+	}
+	isColon := l.peek() == ':'
+	l.pos = save
+	return isColon
+}
+
+// readModifierArgs consumes a modifier's parenthesized arguments, like
+// xor(0x01-0xff) or base64("alphabet"), and returns them verbatim. Quoted
+// strings are skipped as a whole so alphabets may contain parentheses.
+func (l *yaraLexer) readModifierArgs() string {
+	save := l.pos
+	for l.skipWhitespace() || l.skipComment() {
+	}
+	if l.peek() != '(' {
+		l.pos = save
+		return ""
+	}
+	start := l.pos
+	depth := 0
+	for l.pos < len(l.input) {
+		switch l.input[l.pos] {
+		case '"':
+			l.readQuotedString()
+			continue
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				l.pos++
+				return l.input[start:l.pos]
+			}
+		}
+		l.pos++
+	}
+	l.errorf("unterminated modifier arguments")
+	return l.input[start:l.pos]
 }
 
 func (l *yaraLexer) lexHexString(lval *yySymType) int {

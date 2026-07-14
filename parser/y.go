@@ -31,33 +31,31 @@ type yySymType struct {
 	exprs      []ast.Expr
 }
 
-const (
-	RULE           = 57346
-	META           = 57347
-	STRINGS        = 57348
-	CONDITION      = 57349
-	IDENT          = 57350
-	STRING_LIT     = 57351
-	STRING_IDENT   = 57352
-	REGEX_LIT      = 57353
-	MODIFIER       = 57354
-	COND_IDENT     = 57355
-	COND_STRING_ID = 57356
-	STRING_PATTERN = 57357
-	HEX_JUMP       = 57358
-	HEX_ALT        = 57359
-	INT_LIT        = 57360
-	HEX_BYTE       = 57361
-	HEX_WILDCARD   = 57362
-	AND            = 57363
-	OR             = 57364
-	AT             = 57365
-	ANY            = 57366
-	ALL            = 57367
-	OF             = 57368
-	THEM           = 57369
-	EQ             = 57370
-)
+const RULE = 57346
+const META = 57347
+const STRINGS = 57348
+const CONDITION = 57349
+const IDENT = 57350
+const STRING_LIT = 57351
+const STRING_IDENT = 57352
+const REGEX_LIT = 57353
+const MODIFIER = 57354
+const COND_IDENT = 57355
+const COND_STRING_ID = 57356
+const STRING_PATTERN = 57357
+const HEX_JUMP = 57358
+const HEX_ALT = 57359
+const INT_LIT = 57360
+const HEX_BYTE = 57361
+const HEX_WILDCARD = 57362
+const AND = 57363
+const OR = 57364
+const AT = 57365
+const ANY = 57366
+const ALL = 57367
+const OF = 57368
+const THEM = 57369
+const EQ = 57370
 
 var yyToknames = [...]string{
 	"$end",
@@ -99,13 +97,11 @@ var yyToknames = [...]string{
 
 var yyStatenames = [...]string{}
 
-const (
-	yyEofCode          = 1
-	yyErrCode          = 2
-	yyInitialStackSize = 16
-)
+const yyEofCode = 1
+const yyErrCode = 2
+const yyInitialStackSize = 16
 
-//line yara.y:324
+//line yara.y:327
 
 //line yacctab:1
 var yyExca = [...]int8{
@@ -706,36 +702,39 @@ yydefault:
 			case "nocase":
 				yyVAL.mods.Nocase = true
 			default:
-				yylex.Error("unsupported modifier: " + yyDollar[2].str)
+				// known-but-unimplemented (wide, xor, ...), argument forms of
+				// supported modifiers, or future modifiers; recorded so the
+				// rule is skipped at compile time and reported as a warning
+				yyVAL.mods.Unsupported = append(yyVAL.mods.Unsupported, yyDollar[2].str)
 			}
 		}
 	case 22:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line yara.y:208
+//line yara.y:211
 		{
 			yyVAL.hexTokens = nil
 		}
 	case 23:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line yara.y:212
+//line yara.y:215
 		{
 			yyVAL.hexTokens = append(yyDollar[1].hexTokens, yyDollar[2].hexToken)
 		}
 	case 24:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:219
+//line yara.y:222
 		{
 			yyVAL.hexToken = ast.HexByte{Value: yyDollar[1].byt}
 		}
 	case 25:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:223
+//line yara.y:226
 		{
 			yyVAL.hexToken = ast.HexWildcard{}
 		}
 	case 26:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:227
+//line yara.y:230
 		{
 			jump, err := parseHexJump(yyDollar[1].str)
 			if err != nil {
@@ -745,7 +744,7 @@ yydefault:
 		}
 	case 27:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:235
+//line yara.y:238
 		{
 			alt, err := parseHexAlt(yyDollar[1].str)
 			if err != nil {
@@ -755,103 +754,103 @@ yydefault:
 		}
 	case 28:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:246
+//line yara.y:249
 		{
 			yyVAL.expr = yyDollar[3].expr
 		}
 	case 29:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:253
+//line yara.y:256
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 30:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:257
+//line yara.y:260
 		{
 			yyVAL.expr = ast.BinaryExpr{Op: "or", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
 		}
 	case 31:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:261
+//line yara.y:264
 		{
 			yyVAL.expr = ast.BinaryExpr{Op: "and", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
 		}
 	case 32:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:265
+//line yara.y:268
 		{
 			yyVAL.expr = ast.BinaryExpr{Op: "==", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
 		}
 	case 33:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:272
+//line yara.y:275
 		{
 			yyVAL.expr = ast.ParenExpr{Inner: yyDollar[2].expr}
 		}
 	case 34:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:276
+//line yara.y:279
 		{
 			yyVAL.expr = ast.AnyOf{Pattern: "them"}
 		}
 	case 35:
 		yyDollar = yyS[yypt-5 : yypt+1]
-//line yara.y:280
+//line yara.y:283
 		{
 			yyVAL.expr = ast.AnyOf{Pattern: yyDollar[4].str}
 		}
 	case 36:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:284
+//line yara.y:287
 		{
 			yyVAL.expr = ast.AllOf{Pattern: "them"}
 		}
 	case 37:
 		yyDollar = yyS[yypt-5 : yypt+1]
-//line yara.y:288
+//line yara.y:291
 		{
 			yyVAL.expr = ast.AllOf{Pattern: yyDollar[4].str}
 		}
 	case 38:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:292
+//line yara.y:295
 		{
 			yyVAL.expr = ast.AtExpr{Ref: ast.StringRef{Name: yyDollar[1].str}, Pos: yyDollar[3].expr}
 		}
 	case 39:
 		yyDollar = yyS[yypt-4 : yypt+1]
-//line yara.y:296
+//line yara.y:299
 		{
 			yyVAL.expr = ast.FuncCall{Name: yyDollar[1].str, Args: yyDollar[3].exprs}
 		}
 	case 40:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:300
+//line yara.y:303
 		{
 			yyVAL.expr = ast.StringRef{Name: yyDollar[1].str}
 		}
 	case 41:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:304
+//line yara.y:307
 		{
 			yyVAL.expr = ast.IntLit{Value: yyDollar[1].num}
 		}
 	case 42:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line yara.y:311
+//line yara.y:314
 		{
 			yyVAL.exprs = nil
 		}
 	case 43:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:315
+//line yara.y:318
 		{
 			yyVAL.exprs = []ast.Expr{yyDollar[1].expr}
 		}
 	case 44:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:319
+//line yara.y:322
 		{
 			yyVAL.exprs = append(yyDollar[1].exprs, yyDollar[3].expr)
 		}
