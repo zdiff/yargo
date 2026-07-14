@@ -1,12 +1,32 @@
 package scanner
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/sansecio/yargo/ast"
 	"github.com/sansecio/yargo/parser"
 )
+
+// testHits converts a "string index -> positions" map into the sorted hit
+// list an evalContext expects, with the rule's strings starting at slot 0.
+func testHits(m map[int][]int) []hit {
+	var hits []hit
+	for idx, positions := range m {
+		for _, pos := range positions {
+			hits = append(hits, hit{pos: pos, slot: int32(idx), n: 1})
+		}
+	}
+	slices.SortFunc(hits, func(a, b hit) int {
+		if a.slot != b.slot {
+			return cmp.Compare(a.slot, b.slot)
+		}
+		return cmp.Compare(a.pos, b.pos)
+	})
+	return hits
+}
 
 // parseTestCondition parses a condition string using the main parser.
 func parseTestCondition(t *testing.T, cond string) ast.Expr {
@@ -34,7 +54,7 @@ func TestEvalStringRef(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := ast.StringRef{Name: "$foo"}
-			ctx := &evalContext{matches: tt.matches, stringNames: []string{"$foo", "$bar"}}
+			ctx := &evalContext{hits: testHits(tt.matches), stringNames: []string{"$foo", "$bar"}}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -61,7 +81,7 @@ func TestEvalAtExpr(t *testing.T) {
 				Ref: ast.StringRef{Name: "$foo"},
 				Pos: ast.IntLit{Value: tt.pos},
 			}
-			ctx := &evalContext{matches: tt.matches, stringNames: []string{"$foo"}}
+			ctx := &evalContext{hits: testHits(tt.matches), stringNames: []string{"$foo"}}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -84,7 +104,7 @@ func TestEvalUint32be(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := ast.FuncCall{Name: "uint32be", Args: []ast.Expr{ast.IntLit{Value: tt.pos}}}
-			ctx := &evalContext{matches: nil, buf: buf}
+			ctx := &evalContext{hits: nil, buf: buf}
 			got := evalFuncCall(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalFuncCall() = %d (0x%x), want %d (0x%x)", got, got, tt.want, tt.want)
@@ -105,7 +125,7 @@ func TestEvalUint16be(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := ast.FuncCall{Name: "uint16be", Args: []ast.Expr{ast.IntLit{Value: tt.pos}}}
-			ctx := &evalContext{matches: nil, buf: buf}
+			ctx := &evalContext{hits: nil, buf: buf}
 			got := evalFuncCall(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalFuncCall() = %d (0x%x), want %d (0x%x)", got, got, tt.want, tt.want)
@@ -151,7 +171,7 @@ func TestEvalComparison(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := &evalContext{matches: nil, buf: buf}
+			ctx := &evalContext{hits: nil, buf: buf}
 			got := evalExpr(tt.expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -179,7 +199,7 @@ func TestEvalAnd(t *testing.T) {
 				Left:  ast.StringRef{Name: "$a"},
 				Right: ast.StringRef{Name: "$b"},
 			}
-			ctx := &evalContext{matches: tt.matches, stringNames: stringNames}
+			ctx := &evalContext{hits: testHits(tt.matches), stringNames: stringNames}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -207,7 +227,7 @@ func TestEvalOr(t *testing.T) {
 				Left:  ast.StringRef{Name: "$a"},
 				Right: ast.StringRef{Name: "$b"},
 			}
-			ctx := &evalContext{matches: tt.matches, stringNames: stringNames}
+			ctx := &evalContext{hits: testHits(tt.matches), stringNames: stringNames}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -232,7 +252,7 @@ func TestEvalAnyOf(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := ast.AnyOf{Pattern: tt.pattern}
-			ctx := &evalContext{matches: tt.matches, buf: nil, stringNames: tt.strings}
+			ctx := &evalContext{hits: testHits(tt.matches), buf: nil, stringNames: tt.strings}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -256,7 +276,7 @@ func TestEvalAllOf(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			expr := ast.AllOf{Pattern: tt.pattern}
-			ctx := &evalContext{matches: tt.matches, buf: nil, stringNames: tt.strings}
+			ctx := &evalContext{hits: testHits(tt.matches), buf: nil, stringNames: tt.strings}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
@@ -279,7 +299,7 @@ func TestEvalParen(t *testing.T) {
 		},
 		Right: ast.StringRef{Name: "$c"},
 	}
-	ctx := &evalContext{matches: matches, stringNames: []string{"$a", "$b", "$c"}}
+	ctx := &evalContext{hits: testHits(matches), stringNames: []string{"$a", "$b", "$c"}}
 	got := evalExpr(expr, ctx)
 	if !got {
 		t.Errorf("evalExpr() = %v, want true", got)
@@ -297,7 +317,7 @@ func TestEvalComplexCondition1(t *testing.T) {
 
 	expr := parseTestCondition(t, `$php and ( (uint32be(0) == 0x47494638 and uint16be(4) == 0x3961) or (uint32be(0) == 0x47494638 and uint16be(4) == 0x3761) )`)
 
-	ctx := &evalContext{matches: matches, buf: buf, stringNames: stringNames}
+	ctx := &evalContext{hits: testHits(matches), buf: buf, stringNames: stringNames}
 	got := evalExpr(expr, ctx)
 	if !got {
 		t.Errorf("evalExpr() = %v, want true", got)
@@ -305,7 +325,7 @@ func TestEvalComplexCondition1(t *testing.T) {
 
 	// Test GIF87a (0x3761) version
 	buf87 := append([]byte("GIF87a"), []byte("<?php echo 1;")...)
-	ctx87 := &evalContext{matches: matches, buf: buf87, stringNames: stringNames}
+	ctx87 := &evalContext{hits: testHits(matches), buf: buf87, stringNames: stringNames}
 	got87 := evalExpr(expr, ctx87)
 	if !got87 {
 		t.Errorf("evalExpr() for GIF87a = %v, want true", got87)
@@ -313,7 +333,7 @@ func TestEvalComplexCondition1(t *testing.T) {
 
 	// Test non-GIF should fail
 	bufPNG := append([]byte("\x89PNG\r\n"), []byte("<?php echo 1;")...)
-	ctxPNG := &evalContext{matches: matches, buf: bufPNG, stringNames: stringNames}
+	ctxPNG := &evalContext{hits: testHits(matches), buf: bufPNG, stringNames: stringNames}
 	gotPNG := evalExpr(expr, ctxPNG)
 	if gotPNG {
 		t.Errorf("evalExpr() for PNG = %v, want false", gotPNG)
@@ -329,7 +349,7 @@ func TestEvalComplexCondition2(t *testing.T) {
 
 	expr := parseTestCondition(t, `($jpg at 0) and $php`)
 
-	ctx := &evalContext{matches: matches, buf: buf, stringNames: stringNames}
+	ctx := &evalContext{hits: testHits(matches), buf: buf, stringNames: stringNames}
 	got := evalExpr(expr, ctx)
 	if !got {
 		t.Errorf("evalExpr() = %v, want true", got)
@@ -337,7 +357,7 @@ func TestEvalComplexCondition2(t *testing.T) {
 
 	// Test jpg not at 0
 	matchesWrongPos := map[int][]int{0: {5}, 1: {10}}
-	ctxWrongPos := &evalContext{matches: matchesWrongPos, buf: buf, stringNames: stringNames}
+	ctxWrongPos := &evalContext{hits: testHits(matchesWrongPos), buf: buf, stringNames: stringNames}
 	gotWrongPos := evalExpr(expr, ctxWrongPos)
 	if gotWrongPos {
 		t.Errorf("evalExpr() with wrong pos = %v, want false", gotWrongPos)
@@ -352,7 +372,7 @@ func TestEvalComplexCondition3(t *testing.T) {
 
 	expr := parseTestCondition(t, `$png at 0 and any of ($b64_*)`)
 
-	ctx := &evalContext{matches: matches, buf: buf, stringNames: stringNames}
+	ctx := &evalContext{hits: testHits(matches), buf: buf, stringNames: stringNames}
 	got := evalExpr(expr, ctx)
 	if !got {
 		t.Errorf("evalExpr() = %v, want true", got)
@@ -360,7 +380,7 @@ func TestEvalComplexCondition3(t *testing.T) {
 
 	// Test no b64_* matched
 	matchesNoB64 := map[int][]int{0: {0}}
-	ctxNoB64 := &evalContext{matches: matchesNoB64, buf: buf, stringNames: stringNames}
+	ctxNoB64 := &evalContext{hits: testHits(matchesNoB64), buf: buf, stringNames: stringNames}
 	gotNoB64 := evalExpr(expr, ctxNoB64)
 	if gotNoB64 {
 		t.Errorf("evalExpr() with no b64 = %v, want false", gotNoB64)

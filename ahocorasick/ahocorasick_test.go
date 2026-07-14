@@ -1,6 +1,11 @@
 package ahocorasick
 
 import (
+	"bytes"
+	"fmt"
+	"math/rand/v2"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -88,6 +93,80 @@ func TestIterOverlapping_SubstringPatterns(t *testing.T) {
 	}
 }
 
+func TestPrefilter_Engages(t *testing.T) {
+	ac := buildAC("zzq")
+	if ac.i.prefil == nil {
+		t.Fatal("expected prefilter to be built for a single pattern")
+	}
+
+	haystack := bytes.Repeat([]byte{'a'}, 1<<20)
+	iter := ac.IterOverlappingByte(haystack)
+	if m := iter.Next(); m != nil {
+		t.Fatalf("unexpected match at [%d,%d)", m.Start(), m.End())
+	}
+	if iter.prestate.skips == 0 {
+		t.Error("expected prefilter to engage during the scan (skips > 0)")
+	}
+}
+
+func TestPrefilter_SkipsToMatch(t *testing.T) {
+	haystack := bytes.Repeat([]byte{'q'}, 100000)
+	copy(haystack[50000:], "abz")
+
+	ac := buildAC("abz")
+	matches := collectMatches(ac, string(haystack))
+
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Start() != 50000 || matches[0].End() != 50003 {
+		t.Errorf("expected match at [50000,50003), got [%d,%d)", matches[0].Start(), matches[0].End())
+	}
+}
+
+func TestPrefilter_DifferentialAgainstNoPrefilter(t *testing.T) {
+	// Three patterns so the fixed rare-bytes builder (one byte per pattern)
+	// stays within the ≤3 byte limit and the prefilter is guaranteed to build.
+	patterns := [][]byte{
+		[]byte("zqx"),
+		[]byte("~jklm"),
+		[]byte("jkl"),
+	}
+	noPreBuilder := &iNFABuilder{denseDepth: 3, prefilter: false}
+
+	rng := rand.New(rand.NewPCG(42, 0))
+	for round := range 20 {
+		haystack := make([]byte, 1<<16)
+		for i := range haystack {
+			haystack[i] = byte('a' + rng.IntN(16))
+		}
+		for range 10 {
+			p := patterns[rng.IntN(len(patterns))]
+			pos := rng.IntN(len(haystack) - len(p))
+			copy(haystack[pos:], p)
+		}
+
+		builder := NewAhoCorasickBuilder()
+		withPre := builder.BuildByte(patterns)
+		if withPre.i.prefil == nil {
+			t.Fatal("expected prefilter to be built for these patterns")
+		}
+		noPre := AhoCorasick{noPreBuilder.build(patterns)}
+
+		got := collectMatches(withPre, string(haystack))
+		want := collectMatches(noPre, string(haystack))
+
+		if len(got) != len(want) {
+			t.Fatalf("round %d: prefilter scan found %d matches, reference found %d", round, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("round %d: match %d differs: got %+v, want %+v", round, i, got[i], want[i])
+			}
+		}
+	}
+}
+
 func TestIterOverlapping_Parallel(t *testing.T) {
 	ac := buildAC("bear", "masha")
 	haystack := []byte("The bear and masha")
@@ -108,4 +187,62 @@ func TestIterOverlapping_Parallel(t *testing.T) {
 		}()
 	}
 	w.Wait()
+}
+
+// bruteForceFold finds every case-insensitive occurrence of each pattern.
+func bruteForceFold(patterns [][]byte, haystack []byte) []string {
+	var out []string
+	for pi, p := range patterns {
+		for i := 0; i+len(p) <= len(haystack); i++ {
+			if strings.EqualFold(string(haystack[i:i+len(p)]), string(p)) {
+				out = append(out, fmt.Sprintf("%d@%d", pi, i))
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestAsciiCaseFoldMatchesBruteForce(t *testing.T) {
+	// small sets keep the prefilter active, large sets disable it —
+	// both paths must fold the haystack identically
+	patternSets := [][][]byte{
+		{[]byte("abc")},
+		{[]byte("aB"), []byte("Ab")},
+		{[]byte("she"), []byte("he"), []byte("hers"), []byte("his")},
+		{[]byte("GetProcAddress"), []byte("eval"), []byte("\x01\x02Z"), []byte("Zz")},
+	}
+	alphabet := []byte("aAbBcCzZeEhHsSrRgG\x00\x01\x02 ")
+	rng := rand.New(rand.NewPCG(7, 11))
+
+	var sawPrefilter bool
+	for si, patterns := range patternSets {
+		builder := NewAhoCorasickBuilder()
+		builder.AsciiCaseFold(true)
+		ac := builder.BuildByte(patterns)
+		sawPrefilter = sawPrefilter || ac.i.prefil != nil
+
+		for range 200 {
+			haystack := make([]byte, rng.IntN(64))
+			for i := range haystack {
+				haystack[i] = alphabet[rng.IntN(len(alphabet))]
+			}
+
+			var got []string
+			iter := ac.IterOverlappingByte(haystack)
+			for m := iter.Next(); m != nil; m = iter.Next() {
+				got = append(got, fmt.Sprintf("%d@%d", m.Pattern(), m.Start()))
+			}
+			slices.Sort(got)
+
+			want := bruteForceFold(patterns, haystack)
+			if !slices.Equal(got, want) {
+				t.Fatalf("set %d, haystack %q:\n got %v\nwant %v", si, haystack, got, want)
+			}
+		}
+	}
+
+	if !sawPrefilter {
+		t.Error("no pattern set built a prefilter, so the folded prefilter path went untested")
+	}
 }

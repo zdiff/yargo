@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sansecio/yargo/ast"
@@ -112,6 +113,8 @@ func TestParseRegex(t *testing.T) {
 		{`/pattern/sim`, "pattern"},
 		{`/foo\/bar/`, `foo\/bar`},
 		{`/\bword\b/i`, `\bword\b`},
+		{`/a[/]b/`, `a[/]b`},
+		{`/a[^/]+b/i`, `a[^/]+b`},
 	}
 
 	for _, tt := range tests {
@@ -260,6 +263,71 @@ func TestParseConditionWithParens(t *testing.T) {
 	}
 	if bin.Op != "and" {
 		t.Errorf("expected 'and', got %q", bin.Op)
+	}
+}
+
+func TestParseHexAltWithSpaces(t *testing.T) {
+	rs := mustParse(t, `rule test { strings: $ = { (AB | CD) EF } condition: any of them }`)
+	hex := rs.Rules[0].Strings[0].Value.(ast.HexString)
+	want := []ast.HexToken{
+		ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: bytePtr(0xAB)}, {Byte: bytePtr(0xCD)}}},
+		ast.HexByte{Value: 0xEF},
+	}
+	if !hexTokensEqual(hex.Tokens, want) {
+		t.Errorf("expected %v, got %v", want, hex.Tokens)
+	}
+}
+
+func TestParseUppercaseHexInt(t *testing.T) {
+	rs := mustParse(t, `rule t { condition: 0XFF }`)
+	lit, ok := rs.Rules[0].Condition.(ast.IntLit)
+	if !ok {
+		t.Fatalf("expected IntLit condition, got %T", rs.Rules[0].Condition)
+	}
+	if lit.Value != 0xFF {
+		t.Errorf("expected 255, got %d", lit.Value)
+	}
+}
+
+func TestParseInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		errPart string
+	}{
+		{"multi-byte hex alternative", `rule t { strings: $ = { (4142|43) } condition: any of them }`, "alternative"},
+		{"garbage hex alternative", `rule t { strings: $ = { (GG|41) } condition: any of them }`, "alternative"},
+		{"garbage hex jump", `rule t { strings: $ = { FF [1-x] 41 } condition: any of them }`, "jump"},
+		{"inverted hex jump", `rule t { strings: $ = { FF [5-2] 41 } condition: any of them }`, "jump"},
+		{"unterminated hex jump", `rule t { strings: $ = { FF [1-2 } condition: any of them }`, "unterminated"},
+		{"unterminated hex alternation", `rule t { strings: $ = { FF (41|42 } condition: any of them }`, "unterminated"},
+		{"unterminated string", `rule t { strings: $ = "abc`, "unterminated"},
+		{"unterminated regex", `rule t { strings: $ = /abc`, "unterminated"},
+		{"unterminated block comment", `rule t { /* comment`, "unterminated"},
+		{"integer overflow", `rule t { condition: 99999999999999999999 }`, "integer"},
+		{"hex integer overflow", `rule t { condition: 0xFFFFFFFFFFFFFFFFFF }`, "integer"},
+		{"non-ascii whitespace", "rule t \xa0{ condition: 0 }", "unexpected character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New().Parse(tt.input)
+			if err == nil {
+				t.Fatal("expected parse error")
+			}
+			if !strings.Contains(err.Error(), tt.errPart) {
+				t.Errorf("expected error containing %q, got %q", tt.errPart, err.Error())
+			}
+		})
+	}
+}
+
+func TestParseErrorMessagePreserved(t *testing.T) {
+	_, err := New().Parse(`rule t { condition: @ }`)
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "unexpected character") {
+		t.Errorf("expected descriptive lexer error to survive, got %q", err.Error())
 	}
 }
 

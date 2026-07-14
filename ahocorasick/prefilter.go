@@ -80,15 +80,19 @@ type prefilter struct {
 	offsets rareByteOffsets
 	bytes   [3]byte
 	count   int
+	fold    bool
 }
 
 func (p *prefilter) nextCandidate(state *prefilterState, haystack []byte, at int) int {
 	rare := p.bytes[:p.count]
 	for i, b := range haystack[at:] {
+		if p.fold {
+			b = foldByte(b)
+		}
 		if slices.Contains(rare, b) {
 			pos := at + i
 			state.updateAt(pos)
-			return max(at, max(pos-int(p.offsets.rbo[haystack[pos]].max), 0))
+			return max(at, max(pos-int(p.offsets.rbo[b].max), 0))
 		}
 	}
 	return noneCandidate
@@ -147,16 +151,17 @@ func (r *rareBytesBuilder) add(bytes []byte) {
 		}
 		if r.rareSet.contains(b) {
 			found = true
+			continue
 		}
 		rank := freqRank(b)
 		if rank < rarest2 {
 			rarest1 = b
 			rarest2 = rank
 		}
+	}
 
-		if !found {
-			r.addRareByte(rarest1)
-		}
+	if !found {
+		r.addRareByte(rarest1)
 	}
 }
 

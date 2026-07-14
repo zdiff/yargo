@@ -3,6 +3,7 @@ package scanner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -60,30 +61,28 @@ type (
 		matcher       *ahocorasick.AhoCorasick
 		patterns      [][]byte
 		patternMap    []patternRef
-		origPatterns  [][]byte // original (non-lowered) patterns for case-sensitive verification
-		hasNocase     bool     // skip toLowerASCII when no nocase patterns exist
+		slotRule      []int32 // string slot -> rule index
 		regexPatterns []*regexPattern
 	}
 )
 
 type (
-	// patternRef maps a pattern index back to its source rule and string.
+	// patternRef maps a pattern index back to the string slot it belongs to.
 	patternRef struct {
-		ruleIndex   int
-		stringIndex int
-		fullword    bool
-		nocase      bool
-		regexIdx    int
+		slot     int32
+		fullword bool
+		verify   bool // confirm the hit against the original buffer (case-folded scan)
+		regexIdx int
 	}
 
 	// regexPattern holds a lazily compiled regex for complex regex matching.
 	regexPattern struct {
-		pattern     string
-		compile     CompileFunc
-		once        sync.Once
-		re          Regexp
-		ruleIndex   int
-		stringIndex int
+		pattern  string
+		compile  CompileFunc
+		once     sync.Once
+		re       Regexp
+		slot     int32
+		fullword bool
 	}
 
 	// compiledRule holds the compiled form of a single YARA rule.
@@ -92,12 +91,23 @@ type (
 		metas       []Meta
 		condition   ast.Expr
 		stringNames []string
+		slotBase    int32 // slot of this rule's first string
 	}
 
-	// matchInfo records the position and data of a single pattern match.
-	matchInfo struct {
+	// hit records one confirmed match. Every string of every rule owns a
+	// distinct slot, and slots are handed out per rule in order, so sorting
+	// hits by slot groups them by rule and then by string in one pass. The
+	// matched bytes are only copied out of the buffer for rules that pass.
+	hit struct {
 		pos  int
-		data []byte
+		slot int32
+		n    int32
+	}
+
+	// atomHit records a regex atom hit, to be verified against the full regex.
+	atomHit struct {
+		pos      int
+		regexIdx int32
 	}
 )
 
@@ -155,112 +165,200 @@ func checkWordBoundary(buf []byte, start, end int) bool {
 	return true
 }
 
-// ScanMem scans a byte buffer for matching rules.
+// ScanMem scans a byte buffer for matching rules. A timeout of zero or less
+// means no timeout.
 func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration, cb ScanCallback) error {
 	if r.matcher == nil && len(r.regexPatterns) == 0 {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ruleMatches := r.collectMatches(buf)
-	return r.evaluateRules(ctx, buf, ruleMatches, cb)
-}
-
-// toLowerASCII returns a copy with ASCII A-Z lowered. Unlike bytes.ToLower,
-// it never changes buffer length (safe for binary/Latin-1 data).
-func toLowerASCII(b []byte) []byte {
-	out := make([]byte, len(b))
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			out[i] = c + 0x20
-		} else {
-			out[i] = c
-		}
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
-	return out
+
+	hits, err := r.collectMatches(ctx, buf)
+	if err != nil {
+		return err
+	}
+	return r.evaluateRules(ctx, buf, hits, cb)
 }
 
-// collectMatches runs AC matching, atom-based regex verification, and full-scan
-// regex to collect all match positions per rule and string index.
-func (r *Rules) collectMatches(buf []byte) map[int]map[int][]matchInfo {
-	ruleMatches := make(map[int]map[int][]matchInfo)
-	atomCandidates := make(map[int][]int)
+// ctxCheckInterval is how many AC matches (or regex verification windows)
+// are processed between context cancellation checks.
+const ctxCheckInterval = 4096
+
+// collectMatches runs AC matching and atom-based regex verification, returning
+// every hit sorted by slot (and so grouped by rule) and then by position.
+func (r *Rules) collectMatches(ctx context.Context, buf []byte) ([]hit, error) {
+	var hits []hit
+	var atoms []atomHit
 
 	if r.matcher != nil {
-		// when nocase patterns exist, AC runs on a lowercased buffer
-		// and case-sensitive hits are verified against the original
-		scanBuf := buf
-		if r.hasNocase {
-			scanBuf = toLowerASCII(buf)
-		}
-
-		iter := r.matcher.IterOverlappingByte(scanBuf)
+		iter := r.matcher.IterOverlappingByte(buf)
+		steps := 0
 		for match := iter.Next(); match != nil; match = iter.Next() {
+			steps++
+			if steps%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			ref := r.patternMap[match.Pattern()]
 
-			if ref.regexIdx >= 0 {
-				atomCandidates[ref.regexIdx] = append(atomCandidates[ref.regexIdx], match.Start())
+			// the automaton folds case when any nocase pattern exists, so
+			// case-sensitive hits (including every regex atom) are confirmed
+			// against the original buffer before doing any further work
+			if ref.verify && !bytes.Equal(buf[match.Start():match.End()], r.patterns[match.Pattern()]) {
 				continue
 			}
 
-			// case-sensitive patterns need verification against the original buffer
-			if r.hasNocase && !ref.nocase {
-				orig := r.origPatterns[match.Pattern()]
-				if !bytes.Equal(buf[match.Start():match.End()], orig) {
-					continue
-				}
+			if ref.regexIdx >= 0 {
+				atoms = append(atoms, atomHit{pos: match.Start(), regexIdx: int32(ref.regexIdx)})
+				continue
 			}
 
 			if ref.fullword && !checkWordBoundary(buf, match.Start(), match.End()) {
 				continue
 			}
 
-			data := make([]byte, match.End()-match.Start())
-			copy(data, buf[match.Start():match.End()])
-			addMatch(ruleMatches, ref.ruleIndex, ref.stringIndex, match.Start(), data)
+			hits = append(hits, hit{pos: match.Start(), slot: ref.slot, n: int32(match.End() - match.Start())})
 		}
 	}
 
+	hits, err := r.verifyAtoms(ctx, buf, atoms, hits)
+	if err != nil {
+		return nil, err
+	}
+	return groupBySlot(hits), nil
+}
+
+// countingSortMinHits is where a linear counting sort starts beating a
+// comparison sort, given the counts array it has to allocate.
+const countingSortMinHits = 64
+
+// countingSortMaxSpread caps how much wider than the hit count the counts
+// array may get. A big ruleset spans a huge slot range, and zeroing an array
+// that dwarfs the hits costs far more than just comparing them.
+const countingSortMaxSpread = 8
+
+// groupBySlot arranges hits so that each slot's hits are contiguous, which
+// also makes each rule's hits contiguous. It is stable, so hits keep the
+// ascending position order the automaton produced them in.
+func groupBySlot(hits []hit) []hit {
+	if len(hits) < 2 {
+		return hits
+	}
+
+	lo, hi := hits[0].slot, hits[0].slot
+	for _, h := range hits {
+		lo = min(lo, h.slot)
+		hi = max(hi, h.slot)
+	}
+	span := int(hi-lo) + 2
+
+	if len(hits) < countingSortMinHits || span > countingSortMaxSpread*len(hits) {
+		slices.SortStableFunc(hits, func(a, b hit) int { return cmp.Compare(a.slot, b.slot) })
+		return hits
+	}
+
+	counts := make([]int32, span)
+	for _, h := range hits {
+		counts[h.slot-lo+1]++
+	}
+	for i := 1; i < len(counts); i++ {
+		counts[i] += counts[i-1]
+	}
+
+	out := make([]hit, len(hits))
+	for _, h := range hits {
+		out[counts[h.slot-lo]] = h
+		counts[h.slot-lo]++
+	}
+	return out
+}
+
+// verifyAtoms runs the full regex around each atom hit, appending every
+// distinct match it confirms.
+func (r *Rules) verifyAtoms(ctx context.Context, buf []byte, atoms []atomHit, hits []hit) ([]hit, error) {
+	if len(atoms) == 0 {
+		return hits, nil
+	}
+
+	// group by regex, and within a regex try candidate positions in order
+	slices.SortFunc(atoms, func(a, b atomHit) int {
+		if a.regexIdx != b.regexIdx {
+			return cmp.Compare(a.regexIdx, b.regexIdx)
+		}
+		return cmp.Compare(a.pos, b.pos)
+	})
+
 	halfWindow := maxMatchLen / 2
-	for regexIdx, positions := range atomCandidates {
-		rp := r.regexPatterns[regexIdx]
+	windows := 0
+	for i := 0; i < len(atoms); {
+		j := i
+		for j < len(atoms) && atoms[j].regexIdx == atoms[i].regexIdx {
+			j++
+		}
+		group := atoms[i:j]
+		i = j
+
+		rp := r.regexPatterns[group[0].regexIdx]
 		re := rp.compiled()
 		if re == nil {
 			continue
 		}
-		positions = dedupe(positions)
 
-		for _, pos := range positions {
-			start := max(0, pos-halfWindow)
-			end := min(len(buf), pos+halfWindow)
-
-			if loc := recoverFindIndex(re, buf[start:end]); loc != nil {
-				matchStart := start + loc[0]
-				matchEnd := start + loc[1]
-				data := make([]byte, matchEnd-matchStart)
-				copy(data, buf[matchStart:matchEnd])
-				addMatch(ruleMatches, rp.ruleIndex, rp.stringIndex, matchStart, data)
-				break
+		// Verify a window around every candidate position, recording each
+		// distinct match. Candidates inside an already verified match are
+		// skipped and windows start after it (non-overlapping, like RE2's
+		// FindAll), so the same match is never reported twice.
+		lastEnd := 0
+		for k, a := range group {
+			// different atoms of one regex can land on the same position
+			if k > 0 && a.pos == group[k-1].pos {
+				continue
 			}
+			if a.pos < lastEnd {
+				continue
+			}
+			windows++
+			if windows%ctxCheckInterval == 0 && ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			start := max(max(0, a.pos-halfWindow), lastEnd)
+			end := min(len(buf), a.pos+halfWindow)
+
+			loc := recoverFindIndex(re, buf[start:end])
+			if loc == nil {
+				continue
+			}
+			matchStart := start + loc[0]
+			matchEnd := start + loc[1]
+			lastEnd = matchEnd
+			if rp.fullword && !checkWordBoundary(buf, matchStart, matchEnd) {
+				continue
+			}
+			hits = append(hits, hit{pos: matchStart, slot: rp.slot, n: int32(matchEnd - matchStart)})
 		}
 	}
 
-	return ruleMatches
+	return hits, nil
 }
 
-// evaluateRules evaluates conditions for rules with matches, invokes the
+// evaluateRules evaluates conditions for rules with hits, invokes the
 // callback for matching rules, and handles abort/timeout.
-func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[int]map[int][]matchInfo, cb ScanCallback) error {
-	ruleIndices := make([]int, 0, len(ruleMatches))
-	for ruleIdx := range ruleMatches {
-		ruleIndices = append(ruleIndices, ruleIdx)
-	}
-	slices.Sort(ruleIndices)
+func (r *Rules) evaluateRules(ctx context.Context, buf []byte, hits []hit, cb ScanCallback) error {
+	// hits are sorted by slot, so each rule owns one contiguous run
+	for i := 0; i < len(hits); {
+		ruleIdx := r.slotRule[hits[i].slot]
+		j := i
+		for j < len(hits) && r.slotRule[hits[j].slot] == ruleIdx {
+			j++
+		}
+		ruleHits := hits[i:j]
+		i = j
 
-	for _, ruleIdx := range ruleIndices {
-		matchedStrings := ruleMatches[ruleIdx]
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -268,18 +366,9 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 		}
 
 		cr := r.rules[ruleIdx]
-
-		matchPositions := make(map[int][]int, len(matchedStrings))
-		for idx, infos := range matchedStrings {
-			positions := make([]int, len(infos))
-			for i, info := range infos {
-				positions[i] = info.pos
-			}
-			matchPositions[idx] = positions
-		}
-
 		evalCtx := &evalContext{
-			matches:     matchPositions,
+			hits:        ruleHits,
+			slotBase:    cr.slotBase,
 			buf:         buf,
 			stringNames: cr.stringNames,
 		}
@@ -287,11 +376,14 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 			continue
 		}
 
-		strings := make([]MatchString, 0, len(matchedStrings))
-		for idx, infos := range matchedStrings {
-			name := cr.stringNames[idx]
-			for _, info := range infos {
-				strings = append(strings, MatchString{Name: name, Data: info.data})
+		// hits are grouped by slot, so strings come out ordered by string
+		// index and then by position. Only rules that actually match pay
+		// for copying their match data out of the buffer.
+		strings := make([]MatchString, len(ruleHits))
+		for k, h := range ruleHits {
+			strings[k] = MatchString{
+				Name: cr.stringNames[h.slot-cr.slotBase],
+				Data: bytes.Clone(buf[h.pos : h.pos+int(h.n)]),
 			}
 		}
 
@@ -319,13 +411,6 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, ruleMatches map[i
 //
 // See scanfile_unix.go, scanfile_windows.go, and scanfile_js.go.
 
-func addMatch(m map[int]map[int][]matchInfo, ruleIdx int, stringIndex int, pos int, data []byte) {
-	if m[ruleIdx] == nil {
-		m[ruleIdx] = make(map[int][]matchInfo)
-	}
-	m[ruleIdx][stringIndex] = append(m[ruleIdx][stringIndex], matchInfo{pos: pos, data: data})
-}
-
 // compiled returns the compiled Regexp, compiling it on first use.
 // If compilation fails, it returns nil.
 func (rp *regexPattern) compiled() Regexp {
@@ -348,19 +433,4 @@ func recoverFindIndex(re Regexp, b []byte) (loc []int) {
 		}
 	}()
 	return re.FindIndex(b)
-}
-
-func dedupe(positions []int) []int {
-	if len(positions) <= 1 {
-		return positions
-	}
-	slices.Sort(positions)
-	j := 1
-	for i := 1; i < len(positions); i++ {
-		if positions[i] != positions[j-1] {
-			positions[j] = positions[i]
-			j++
-		}
-	}
-	return positions[:j]
 }
