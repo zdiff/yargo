@@ -1,11 +1,12 @@
 package ahocorasick
 
+import "slices"
+
 type iNFA struct {
 	startID       stateID
 	maxPatternLen int
 	prefil        *prefilter
 	anchored      bool
-	fold          bool
 	states        []state
 	denseTable    []stateID
 	matches       map[stateID][]pattern
@@ -179,12 +180,78 @@ func (c *compiler) compile(patterns [][]byte) *iNFA {
 		}
 	}
 
+	c.premultiplyDense()
+	if c.builder.fold {
+		c.mirrorFoldedEdges()
+	}
+	c.compactSparse()
+
 	c.nfa.matchBitset = make([]uint64, (len(c.nfa.states)+63)/64)
 	for id := range c.nfa.matches {
 		c.nfa.matchBitset[uint(id)/64] |= 1 << (uint(id) % 64)
 	}
 
 	return &c.nfa
+}
+
+// premultiplyDense resolves the failure chain of every missing transition in
+// dense states, turning their rows into full DFA rows. The scan then takes a
+// single table lookup for the shallow states where it spends most of its time.
+func (c *compiler) premultiplyDense() {
+	for id := range c.nfa.states {
+		d := c.nfa.states[id].dense
+		if d < 0 {
+			continue
+		}
+		row := c.nfa.denseTable[d : int(d)+256]
+		for b, next := range row {
+			if next == failedStateID {
+				row[b] = c.nfa.NextStateNoFail(c.nfa.states[id].fail, byte(b))
+			}
+		}
+	}
+}
+
+// mirrorFoldedEdges copies every a-z transition to its A-Z twin. The folded
+// automaton only has edges on folded bytes, so after mirroring the scan can
+// feed it raw haystack bytes without folding each one.
+func (c *compiler) mirrorFoldedEdges() {
+	for id := range c.nfa.states {
+		s := &c.nfa.states[id]
+		if s.dense >= 0 {
+			row := c.nfa.denseTable[s.dense : int(s.dense)+256]
+			for b := byte('a'); b <= 'z'; b++ {
+				row[b-0x20] = row[b]
+			}
+			continue
+		}
+		for _, e := range slices.Clone(s.sparse) {
+			if e.b >= 'a' && e.b <= 'z' {
+				c.nfa.setNextState(stateID(id), e.b-0x20, e.s)
+			}
+		}
+	}
+}
+
+// compactSparse repacks every state's sparse transitions into one shared
+// arena. States created while inserting a pattern are consecutive, so walking
+// a trie chain reads the arena sequentially instead of chasing per-state
+// allocations, and the exact-fit arena drops append slack.
+func (c *compiler) compactSparse() {
+	total := 0
+	for i := range c.nfa.states {
+		total += len(c.nfa.states[i].sparse)
+	}
+	arena := make([]innerSparse, 0, total)
+	for i := range c.nfa.states {
+		s := &c.nfa.states[i]
+		if len(s.sparse) == 0 {
+			continue
+		}
+		off := len(arena)
+		arena = append(arena, s.sparse...)
+		s.sparse = arena[off:len(arena):len(arena)]
+	}
 }
 
 func (c *compiler) closeStartStateLoop() {
@@ -393,7 +460,6 @@ func newCompiler(builder iNFABuilder) compiler {
 			maxPatternLen: 0,
 			prefil:        nil,
 			anchored:      builder.anchored,
-			fold:          builder.fold,
 			matches:       make(map[stateID][]pattern),
 		},
 	}

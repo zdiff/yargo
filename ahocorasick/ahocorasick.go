@@ -121,6 +121,8 @@ func standardFindAt(a *iNFA, prestate *prefilterState, haystack []byte, at int, 
 
 func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystack []byte, at int, sID *stateID, dst *Match) bool {
 	sid := *sID
+	states := a.states
+	denseTable := a.denseTable
 	for at < len(haystack) {
 		if pf != nil {
 			if prestate.IsEffective(at) && sid == a.startID {
@@ -134,10 +136,13 @@ func standardFindAtImp(a *iNFA, prestate *prefilterState, pf *prefilter, haystac
 			}
 		}
 		b := haystack[at]
-		if a.fold {
-			b = foldByte(b)
+		// dense rows are premultiplied full DFA rows, so one lookup suffices;
+		// in fold mode their A-Z edges mirror a-z, so bytes need no folding
+		if d := states[sid].dense; d >= 0 {
+			sid = denseTable[int(d)+int(b)]
+		} else {
+			sid = a.NextStateNoFail(sid, b)
 		}
-		sid = a.NextStateNoFail(sid, b)
 		at += 1
 
 		if sid == deadStateID || a.hasMatch(sid) {
