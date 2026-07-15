@@ -1,5 +1,7 @@
 package ahocorasick
 
+import "slices"
+
 type iNFA struct {
 	startID       stateID
 	maxPatternLen int
@@ -9,6 +11,15 @@ type iNFA struct {
 	denseTable    []stateID
 	matches       map[stateID][]pattern
 	matchBitset   []uint64
+}
+
+// foldByte lowers ASCII A-Z. It never changes the byte's width, so match
+// offsets stay valid for binary and Latin-1 haystacks.
+func foldByte(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + 0x20
+	}
+	return b
 }
 
 func (n *iNFA) hasMatch(id stateID) bool {
@@ -77,17 +88,19 @@ func (n *iNFA) MaxPatternLen() int {
 	return n.maxPatternLen
 }
 
-func (n *iNFA) GetMatch(id stateID, matchIndex int, end int) *Match {
+// getMatch writes the match at matchIndex into dst, reporting whether one
+// exists. It fills a caller-owned Match so that scanning a haystack with many
+// hits does not allocate once per hit.
+func (n *iNFA) getMatch(id stateID, matchIndex int, end int, dst *Match) bool {
 	m := n.matches[id]
 	if matchIndex >= len(m) {
-		return nil
+		return false
 	}
 	pat := m[matchIndex]
-	return &Match{
-		pattern: pat.PatternID,
-		len:     pat.PatternLength,
-		end:     end,
-	}
+	dst.pattern = pat.PatternID
+	dst.len = pat.PatternLength
+	dst.end = end
+	return true
 }
 
 func (n *iNFA) addMatch(id stateID, patternID, patternLength int) {
@@ -160,7 +173,18 @@ func (c *compiler) compile(patterns [][]byte) *iNFA {
 
 	if !c.builder.anchored {
 		c.nfa.prefil = c.prefilter.build()
+		if c.nfa.prefil != nil {
+			// the prefilter was built from folded patterns, so it must
+			// fold the haystack as it scans for candidates
+			c.nfa.prefil.fold = c.builder.fold
+		}
 	}
+
+	c.premultiplyDense()
+	if c.builder.fold {
+		c.mirrorFoldedEdges()
+	}
+	c.compactSparse()
 
 	c.nfa.matchBitset = make([]uint64, (len(c.nfa.states)+63)/64)
 	for id := range c.nfa.matches {
@@ -168,6 +192,66 @@ func (c *compiler) compile(patterns [][]byte) *iNFA {
 	}
 
 	return &c.nfa
+}
+
+// premultiplyDense resolves the failure chain of every missing transition in
+// dense states, turning their rows into full DFA rows. The scan then takes a
+// single table lookup for the shallow states where it spends most of its time.
+func (c *compiler) premultiplyDense() {
+	for id := range c.nfa.states {
+		d := c.nfa.states[id].dense
+		if d < 0 {
+			continue
+		}
+		row := c.nfa.denseTable[d : int(d)+256]
+		for b, next := range row {
+			if next == failedStateID {
+				row[b] = c.nfa.NextStateNoFail(c.nfa.states[id].fail, byte(b))
+			}
+		}
+	}
+}
+
+// mirrorFoldedEdges copies every a-z transition to its A-Z twin. The folded
+// automaton only has edges on folded bytes, so after mirroring the scan can
+// feed it raw haystack bytes without folding each one.
+func (c *compiler) mirrorFoldedEdges() {
+	for id := range c.nfa.states {
+		s := &c.nfa.states[id]
+		if s.dense >= 0 {
+			row := c.nfa.denseTable[s.dense : int(s.dense)+256]
+			for b := byte('a'); b <= 'z'; b++ {
+				row[b-0x20] = row[b]
+			}
+			continue
+		}
+		for _, e := range slices.Clone(s.sparse) {
+			if e.b >= 'a' && e.b <= 'z' {
+				c.nfa.setNextState(stateID(id), e.b-0x20, e.s)
+			}
+		}
+	}
+}
+
+// compactSparse repacks every state's sparse transitions into one shared
+// arena. States created while inserting a pattern are consecutive, so walking
+// a trie chain reads the arena sequentially instead of chasing per-state
+// allocations, and the exact-fit arena drops append slack.
+func (c *compiler) compactSparse() {
+	total := 0
+	for i := range c.nfa.states {
+		total += len(c.nfa.states[i].sparse)
+	}
+	arena := make([]innerSparse, 0, total)
+	for i := range c.nfa.states {
+		s := &c.nfa.states[i]
+		if len(s.sparse) == 0 {
+			continue
+		}
+		off := len(arena)
+		arena = append(arena, s.sparse...)
+		s.sparse = arena[off:len(arena):len(arena)]
+	}
 }
 
 func (c *compiler) closeStartStateLoop() {
@@ -385,6 +469,7 @@ type iNFABuilder struct {
 	denseDepth int
 	prefilter  bool
 	anchored   bool
+	fold       bool
 }
 
 func newNFABuilder() *iNFABuilder {
@@ -396,8 +481,23 @@ func newNFABuilder() *iNFABuilder {
 }
 
 func (b *iNFABuilder) build(patterns [][]byte) *iNFA {
+	if b.fold {
+		patterns = foldPatterns(patterns)
+	}
 	c := newCompiler(*b)
 	return c.compile(patterns)
+}
+
+func foldPatterns(patterns [][]byte) [][]byte {
+	folded := make([][]byte, len(patterns))
+	for i, p := range patterns {
+		f := make([]byte, len(p))
+		for j, b := range p {
+			f[j] = foldByte(b)
+		}
+		folded[i] = f
+	}
+	return folded
 }
 
 type pattern struct {

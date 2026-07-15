@@ -55,6 +55,7 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 
 	var allPatterns [][]byte
 	var errs []error
+	var hasNocase bool
 	ruleIdx := 0
 
 	skipSubtypes := make(map[string]bool, len(opts.SkipSubtypes))
@@ -65,7 +66,7 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 	}
 
 	for _, r := range rs.Rules {
-		if r.Condition == nil {
+		if r.Condition == nil || hasUnsupportedModifier(r) {
 			continue
 		}
 
@@ -79,20 +80,24 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 			name:      r.Name,
 			metas:     make([]Meta, len(r.Meta)),
 			condition: r.Condition,
+			slotBase:  int32(len(rules.slotRule)),
 		}
 		for i, m := range r.Meta {
 			cr.metas[i] = Meta{Identifier: m.Key, Value: m.Value}
 		}
 		for _, s := range r.Strings {
 			cr.stringNames = append(cr.stringNames, s.Name)
+			rules.slotRule = append(rules.slotRule, int32(ruleIdx))
 		}
 		rules.rules = append(rules.rules, cr)
 
 		for si, s := range r.Strings {
+			slot := cr.slotBase + int32(si)
+
 			patterns, isRegex := generatePatterns(s)
 			if isRegex {
 				var err error
-				allPatterns, err = compileRegex(rules, s, si, r.Name, ruleIdx, allPatterns, opts)
+				allPatterns, err = compileRegex(rules, s, slot, r.Name, allPatterns, opts)
 				if err != nil {
 					errs = append(errs, err)
 				}
@@ -100,12 +105,15 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 			}
 			for _, p := range patterns {
 				rules.patternMap = append(rules.patternMap, patternRef{
-					ruleIndex:   ruleIdx,
-					stringIndex: si,
-					fullword:    s.Modifiers.Fullword,
-					regexIdx:    -1,
+					slot:     slot,
+					fullword: s.Modifiers.Fullword,
+					verify:   !s.Modifiers.Nocase && hasASCIILetter(p),
+					regexIdx: -1,
 				})
 				allPatterns = append(allPatterns, p)
+				if s.Modifiers.Nocase {
+					hasNocase = true
+				}
 			}
 		}
 		ruleIdx++
@@ -115,9 +123,20 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 		return nil, errors.Join(errs...)
 	}
 
+	if !hasNocase {
+		// without nocase patterns the automaton matches exactly, so no
+		// hit ever needs verifying against the original buffer
+		for i := range rules.patternMap {
+			rules.patternMap[i].verify = false
+		}
+	}
+
 	rules.patterns = allPatterns
 	if len(allPatterns) > 0 {
 		builder := ahocorasick.NewAhoCorasickBuilder()
+		// one case-folding pass over the buffer finds both nocase and
+		// case-sensitive hits; the latter are verified during the scan
+		builder.AsciiCaseFold(hasNocase)
 		ac := builder.BuildByte(allPatterns)
 		rules.matcher = &ac
 	}
@@ -125,12 +144,41 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 	return rules, nil
 }
 
-func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName string, ruleIdx int, allPatterns [][]byte, opts CompileOptions) ([][]byte, error) {
+// hasUnsupportedModifier reports whether any of the rule's strings carries a
+// modifier the scanner cannot honor. Such rules are skipped entirely: matching
+// only the honorable strings could flip negated conditions and cause false
+// positives, and matching without a modifier like xor would be plain wrong.
+func hasUnsupportedModifier(r *ast.Rule) bool {
+	for _, s := range r.Strings {
+		if len(s.Modifiers.Unsupported) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasASCIILetter reports whether folding can make p match bytes it otherwise
+// would not. Only A-Z/a-z fold, so a pattern without them never needs
+// verification against the original buffer.
+func hasASCIILetter(p []byte) bool {
+	for _, b := range p {
+		if (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') {
+			return true
+		}
+	}
+	return false
+}
+
+func compileRegex(rules *Rules, s *ast.StringDef, slot int32, ruleName string, allPatterns [][]byte, opts CompileOptions) ([][]byte, error) {
 	var rePattern string
 	var caseInsensitive bool
 
 	switch v := s.Value.(type) {
 	case ast.RegexString:
+		// on a regex, nocase means the same as the i flag
+		if s.Modifiers.Nocase {
+			v.Modifiers.CaseInsensitive = true
+		}
 		rePattern = buildRE2Pattern(v.Pattern, v.Modifiers)
 		caseInsensitive = v.Modifiers.CaseInsensitive
 	case ast.HexString:
@@ -149,18 +197,20 @@ func compileRegex(rules *Rules, s *ast.StringDef, stringIndex int, ruleName stri
 	}
 
 	rp := &regexPattern{
-		pattern:     rePattern,
-		compile:     opts.RegexCompiler,
-		ruleIndex:   ruleIdx,
-		stringIndex: stringIndex,
-		fullword:    s.Modifiers.Fullword,
+		pattern:  rePattern,
+		compile:  opts.RegexCompiler,
+		slot:     slot,
+		fullword: s.Modifiers.Fullword,
 	}
 	regexIdx := len(rules.regexPatterns)
 	rules.regexPatterns = append(rules.regexPatterns, rp)
 
+	// a case-insensitive regex always requires a full scan (see above), so
+	// every atom that reaches here belongs to a case-sensitive regex
 	for _, atom := range atoms {
 		rules.patternMap = append(rules.patternMap, patternRef{
 			regexIdx: regexIdx,
+			verify:   hasASCIILetter(atom),
 		})
 		allPatterns = append(allPatterns, atom)
 	}

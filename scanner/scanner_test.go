@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -387,6 +388,52 @@ func TestZeroTimeoutMeansNoTimeout(t *testing.T) {
 	}
 }
 
+func TestCompileSkipsUnsupportedModifierRules(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule widerule {
+	strings:
+		$a = "needle" wide
+	condition:
+		any of them
+}
+
+rule xorrule {
+	strings:
+		$a = "needle"
+		$b = "other" xor(0x01-0xff)
+	condition:
+		any of them
+}
+
+rule plain {
+	strings:
+		$a = "needle"
+	condition:
+		any of them
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if got := rules.NumRules(); got != 1 {
+		t.Errorf("expected 1 compiled rule, got %d", got)
+	}
+
+	// a rule with an unsupported modifier must not match at all, even via
+	// its supported strings: honoring only part of the rule could flip
+	// negated conditions and cause false positives
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("some needle here"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 || matches[0].Rule != "plain" {
+		t.Errorf("expected only rule plain to match, got %v", matches)
+	}
+}
+
 func TestRegexFullword(t *testing.T) {
 	rs, err := parser.New().Parse(`rule fw { strings: $re = /abc[0-9]+/ fullword condition: any of them }`)
 	if err != nil {
@@ -658,6 +705,260 @@ func TestFullwordModifier(t *testing.T) {
 			got := len(matches) > 0
 			if got != tt.want {
 				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNocaseModifier(t *testing.T) {
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{
+			{
+				Name: "nocase_test",
+				Strings: []*ast.StringDef{
+					{
+						Name:      "$s",
+						Value:     ast.TextString{Value: "evil.com"},
+						Modifiers: ast.StringModifiers{Nocase: true},
+					},
+				},
+				Condition: ast.AnyOf{Pattern: "them"},
+			},
+		},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"lowercase", []byte("visit evil.com today"), true},
+		{"uppercase", []byte("visit EVIL.COM today"), true},
+		{"mixed_case", []byte("visit Evil.Com today"), true},
+		{"random_case", []byte("visit eViL.cOm today"), true},
+		{"no_match", []byte("visit good.com today"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			err = rules.ScanMem(tt.data, 0, time.Second, &matches)
+			if err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := len(matches) > 0
+			if got != tt.want {
+				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNocaseFullword(t *testing.T) {
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{
+			{
+				Name: "nocase_fullword_test",
+				Strings: []*ast.StringDef{
+					{
+						Name:      "$s",
+						Value:     ast.TextString{Value: "evil.com"},
+						Modifiers: ast.StringModifiers{Nocase: true, Fullword: true},
+					},
+				},
+				Condition: ast.AnyOf{Pattern: "them"},
+			},
+		},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"lowercase_fullword", []byte("visit evil.com today"), true},
+		{"uppercase_fullword", []byte("visit EVIL.COM today"), true},
+		{"mixed_fullword", []byte("visit Evil.Com today"), true},
+		{"embedded_no_match", []byte("notevil.comstuff"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			err = rules.ScanMem(tt.data, 0, time.Second, &matches)
+			if err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := len(matches) > 0
+			if got != tt.want {
+				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNocaseWithCaseSensitiveRule(t *testing.T) {
+	// ensure nocase doesn't affect case-sensitive rules in the same ruleset
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{
+			{
+				Name: "case_sensitive",
+				Strings: []*ast.StringDef{
+					{Name: "$s", Value: ast.TextString{Value: "secret"}},
+				},
+				Condition: ast.AnyOf{Pattern: "them"},
+			},
+			{
+				Name: "case_insensitive",
+				Strings: []*ast.StringDef{
+					{
+						Name:      "$s",
+						Value:     ast.TextString{Value: "password"},
+						Modifiers: ast.StringModifiers{Nocase: true},
+					},
+				},
+				Condition: ast.AnyOf{Pattern: "them"},
+			},
+		},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	data := []byte("PASSWORD but no SECRET here")
+	var matches MatchRules
+	err = rules.ScanMem(data, 0, time.Second, &matches)
+	if err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+
+	// only "case_insensitive" should match (PASSWORD matches password nocase)
+	// "case_sensitive" should NOT match (no lowercase "secret")
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Rule != "case_insensitive" {
+		t.Errorf("expected case_insensitive rule, got %q", matches[0].Rule)
+	}
+}
+
+func TestNocaseEndToEnd(t *testing.T) {
+	rule := `rule test_nocase {
+		strings:
+			$ = "ApexPulse.org" fullword nocase
+		condition: any of them
+	}`
+	p := parser.New()
+	rs, err := p.Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"original_case", []byte("visit ApexPulse.org now"), true},
+		{"lowercase", []byte("visit apexpulse.org now"), true},
+		{"uppercase", []byte("visit APEXPULSE.ORG now"), true},
+		{"random_case", []byte("visit aPeXpUlSe.OrG now"), true},
+		{"no_match", []byte("visit example.org now"), false},
+		{"fullword_boundary", []byte("notapexpulse.org"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			err = rules.ScanMem(tt.data, 0, time.Second, &matches)
+			if err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := len(matches) > 0
+			if got != tt.want {
+				t.Errorf("match = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNocaseDoesNotAffectRegex(t *testing.T) {
+	// regex verification must use the original buffer, not the lowered one.
+	// a case-sensitive regex like /[a-z]+/ must not match uppercase input
+	// just because another pattern in the ruleset uses nocase.
+	rule := `rule regex_case {
+		strings:
+			$re = /[a-z]{4}\.com/
+		condition: any of them
+	}
+	rule nocase_text {
+		strings:
+			$s = "trigger" nocase
+		condition: any of them
+	}`
+	p := parser.New()
+	rs, err := p.Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		data      []byte
+		wantRules []string
+	}{
+		{
+			"regex matches lowercase, nocase matches uppercase",
+			[]byte("TRIGGER evil.com"),
+			[]string{"nocase_text", "regex_case"},
+		},
+		{
+			"regex should not match uppercase",
+			[]byte("TRIGGER EVIL.COM"),
+			[]string{"nocase_text"},
+		},
+		{
+			"only regex matches",
+			[]byte("test.com"),
+			[]string{"regex_case"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			err = rules.ScanMem(tt.data, 0, time.Second, &matches)
+			if err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := make([]string, len(matches))
+			for i, m := range matches {
+				got[i] = m.Rule
+			}
+			slices.Sort(got)
+			slices.Sort(tt.wantRules)
+			if !slices.Equal(got, tt.wantRules) {
+				t.Errorf("matched rules = %v, want %v", got, tt.wantRules)
 			}
 		})
 	}
@@ -2079,5 +2380,88 @@ func TestScanFileMatchesScanMem(t *testing.T) {
 		if memMatches[i].Rule != fileMatches[i].Rule {
 			t.Errorf("match[%d] rule mismatch: ScanMem=%q, ScanFile=%q", i, memMatches[i].Rule, fileMatches[i].Rule)
 		}
+	}
+}
+
+func TestNocaseRegexRequiresFullScan(t *testing.T) {
+	// nocase on a regex means the same as the i flag, which yargo cannot
+	// prefilter with atoms — it must be reported, not silently under-matched
+	rule := `rule r {
+		strings:
+			$a = /foo[0-9]+/ nocase
+		condition: $a
+	}`
+	rs, err := parser.New().Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if _, err := Compile(rs); err == nil {
+		t.Fatal("Compile() should reject a nocase regex, got nil error")
+	}
+
+	if _, err := CompileWithOptions(rs, CompileOptions{SkipInvalidRegex: true}); err != nil {
+		t.Fatalf("CompileWithOptions() error = %v", err)
+	}
+}
+
+// When any nocase string exists the automaton folds case, so every
+// case-sensitive pattern must be confirmed against the original buffer.
+func TestNocaseDoesNotLeakIntoOtherPatternTypes(t *testing.T) {
+	rule := `rule folded {
+		strings:
+			$n = "password" nocase
+		condition: $n
+	}
+	rule hex_rule {
+		strings:
+			$h = { 41 42 43 44 }
+		condition: $h
+	}
+	rule regex_rule {
+		strings:
+			$r = /Payload[0-9]+/
+		condition: $r
+	}
+	rule binary_rule {
+		strings:
+			$b = { 01 02 03 04 }
+		condition: $b
+	}`
+	rs, err := parser.New().Parse(rule)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		data string
+		want []string
+	}{
+		{"lowercased hex and regex must not match", "abcd payload42", nil},
+		{"exact case hex and regex match", "ABCD Payload42", []string{"hex_rule", "regex_rule"}},
+		{"nocase string still folds", "PaSsWoRd", []string{"folded"}},
+		{"letterless binary pattern is unaffected", "\x01\x02\x03\x04", []string{"binary_rule"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var matches MatchRules
+			if err := rules.ScanMem([]byte(tt.data), 0, time.Second, &matches); err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+			got := make([]string, len(matches))
+			for i, m := range matches {
+				got[i] = m.Rule
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("scanning %q matched %v, want %v", tt.data, got, tt.want)
+			}
+		})
 	}
 }

@@ -195,8 +195,13 @@ modifiers:
 			$$.Base64 = true
 		case "fullword":
 			$$.Fullword = true
+		case "nocase":
+			$$.Nocase = true
 		default:
-			yylex.Error("unsupported modifier: " + $2)
+			// known-but-unimplemented (wide, xor, ...), argument forms of
+			// supported modifiers, or future modifiers; recorded so the
+			// rule is skipped at compile time and reported as a warning
+			$$.Unsupported = append($$.Unsupported, $2)
 		}
 	}
 	;

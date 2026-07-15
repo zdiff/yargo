@@ -20,7 +20,9 @@ func New() *Parser {
 	return &Parser{}
 }
 
-// Parse parses YARA rules from a string.
+// Parse parses YARA rules from a string. Constructs that parse but cannot be
+// honored, such as unsupported string modifiers, are reported in the returned
+// RuleSet's Warnings instead of failing the parse.
 func (p *Parser) Parse(input string) (*ast.RuleSet, error) {
 	l := newLexer(input)
 	yyParse(l)
@@ -30,7 +32,21 @@ func (p *Parser) Parse(input string) (*ast.RuleSet, error) {
 	if l.ruleSet == nil {
 		return &ast.RuleSet{}, nil
 	}
+	collectWarnings(l.ruleSet)
 	return l.ruleSet, nil
+}
+
+// collectWarnings fills rs.Warnings with one entry per unsupported string
+// modifier, so callers can log what their ruleset silently loses.
+func collectWarnings(rs *ast.RuleSet) {
+	for _, r := range rs.Rules {
+		for _, s := range r.Strings {
+			for _, mod := range s.Modifiers.Unsupported {
+				rs.Warnings = append(rs.Warnings, fmt.Sprintf(
+					"rule %q string %s: unsupported modifier %q, rule will not match", r.Name, s.Name, mod))
+			}
+		}
+	}
 }
 
 // ParseFile parses YARA rules from a file.
