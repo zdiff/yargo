@@ -41,6 +41,51 @@ func parseTestCondition(t *testing.T, cond string) ast.Expr {
 	return rs.Rules[0].Condition
 }
 
+func TestMayMatchWithoutHits(t *testing.T) {
+	byteCheck := ast.BinaryExpr{
+		Op:    "==",
+		Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+		Right: ast.IntLit{Value: 0x47},
+	}
+	tests := []struct {
+		name string
+		expr ast.Expr
+		want bool
+	}{
+		{name: "string reference", expr: ast.StringRef{Name: "$a"}, want: false},
+		{name: "positional string reference", expr: ast.AtExpr{Ref: ast.StringRef{Name: "$a"}, Pos: ast.IntLit{Value: 0}}, want: false},
+		{name: "any of", expr: ast.AnyOf{Pattern: "them"}, want: false},
+		{name: "all of", expr: ast.AllOf{Pattern: "them"}, want: false},
+		{name: "false constant", expr: ast.IntLit{Value: 0}, want: false},
+		{name: "true constant", expr: ast.IntLit{Value: 1}, want: true},
+		{name: "byte function", expr: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}}, want: true},
+		{name: "byte comparison", expr: byteCheck, want: true},
+		{
+			name: "string or byte comparison",
+			expr: ast.BinaryExpr{Op: "or", Left: ast.StringRef{Name: "$a"}, Right: byteCheck},
+			want: true,
+		},
+		{
+			name: "string and byte comparison",
+			expr: ast.BinaryExpr{Op: "and", Left: ast.StringRef{Name: "$a"}, Right: byteCheck},
+			want: false,
+		},
+		{
+			name: "parenthesized byte comparison",
+			expr: ast.ParenExpr{Inner: byteCheck},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mayMatchWithoutHits(tt.expr); got != tt.want {
+				t.Errorf("mayMatchWithoutHits() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEvalStringRef(t *testing.T) {
 	tests := []struct {
 		name    string

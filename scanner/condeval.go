@@ -39,6 +39,40 @@ func (ctx *evalContext) matched(idx int) bool {
 	return len(ctx.hitsFor(idx)) > 0
 }
 
+// mayMatchWithoutHits reports whether expr can be true when none of the rule's
+// strings matched. It is conservative: unknown constructs return true so a
+// future condition type cannot be incorrectly skipped.
+func mayMatchWithoutHits(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case ast.StringRef, ast.AtExpr, ast.AnyOf, ast.AllOf:
+		return false
+
+	case ast.IntLit:
+		return e.Value != 0
+
+	case ast.FuncCall:
+		return true
+
+	case ast.BinaryExpr:
+		switch e.Op {
+		case "and":
+			return mayMatchWithoutHits(e.Left) && mayMatchWithoutHits(e.Right)
+		case "or":
+			return mayMatchWithoutHits(e.Left) || mayMatchWithoutHits(e.Right)
+		case "==":
+			return true
+		default:
+			return true
+		}
+
+	case ast.ParenExpr:
+		return mayMatchWithoutHits(e.Inner)
+
+	default:
+		return true
+	}
+}
+
 // evalExpr evaluates a condition expression and returns true if it matches.
 func evalExpr(expr ast.Expr, ctx *evalContext) bool {
 	switch e := expr.(type) {
