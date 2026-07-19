@@ -600,6 +600,123 @@ func TestRuleWithNoStrings(t *testing.T) {
 	}
 }
 
+func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
+	tests := []struct {
+		name string
+		rule *ast.Rule
+		data []byte
+	}{
+		{
+			name: "constant condition without strings",
+			rule: &ast.Rule{
+				Name:      "constant_true",
+				Condition: ast.IntLit{Value: 1},
+			},
+			data: []byte("any data"),
+		},
+		{
+			name: "byte condition without strings",
+			rule: &ast.Rule{
+				Name: "gif_magic",
+				Condition: ast.BinaryExpr{
+					Op:    "==",
+					Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+					Right: ast.IntLit{Value: 0x47},
+				},
+			},
+			data: []byte("GIF"),
+		},
+		{
+			name: "true non-string branch without a string hit",
+			rule: &ast.Rule{
+				Name: "string_or_magic",
+				Strings: []*ast.StringDef{
+					{Name: "$a", Value: ast.TextString{Value: "not present"}},
+				},
+				Condition: ast.BinaryExpr{
+					Op:   "or",
+					Left: ast.StringRef{Name: "$a"},
+					Right: ast.BinaryExpr{
+						Op:    "==",
+						Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+						Right: ast.IntLit{Value: 0x47},
+					},
+				},
+			},
+			data: []byte("GIF"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules, err := Compile(&ast.RuleSet{Rules: []*ast.Rule{tt.rule}})
+			if err != nil {
+				t.Fatalf("Compile() error = %v", err)
+			}
+
+			var matches MatchRules
+			if err := rules.ScanMem(tt.data, 0, time.Second, &matches); err != nil {
+				t.Fatalf("ScanMem() error = %v", err)
+			}
+
+			if len(matches) != 1 {
+				t.Fatalf("expected 1 match, got %d", len(matches))
+			}
+			if matches[0].Rule != tt.rule.Name {
+				t.Errorf("matched rule = %q, want %q", matches[0].Rule, tt.rule.Name)
+			}
+			if len(matches[0].Strings) != 0 {
+				t.Errorf("expected no matching strings, got %d", len(matches[0].Strings))
+			}
+		})
+	}
+}
+
+func TestRulesWithAndWithoutHitsKeepCompilationOrder(t *testing.T) {
+	byteCheck := ast.BinaryExpr{
+		Op:    "==",
+		Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+		Right: ast.IntLit{Value: 0x47},
+	}
+	rs := &ast.RuleSet{Rules: []*ast.Rule{
+		{Name: "before", Condition: ast.IntLit{Value: 1}},
+		{
+			Name:      "string_hit",
+			Strings:   []*ast.StringDef{{Name: "$a", Value: ast.TextString{Value: "GIF"}}},
+			Condition: ast.StringRef{Name: "$a"},
+		},
+		{
+			Name:    "hit_and_hitless_candidate",
+			Strings: []*ast.StringDef{{Name: "$a", Value: ast.TextString{Value: "GIF"}}},
+			Condition: ast.BinaryExpr{
+				Op:    "or",
+				Left:  ast.StringRef{Name: "$a"},
+				Right: byteCheck,
+			},
+		},
+		{Name: "after", Condition: byteCheck},
+	}}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("GIF"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+
+	got := make([]string, len(matches))
+	for i, match := range matches {
+		got[i] = match.Rule
+	}
+	want := []string{"before", "string_hit", "hit_and_hitless_candidate", "after"}
+	if !slices.Equal(got, want) {
+		t.Errorf("matched rules = %v, want %v", got, want)
+	}
+}
+
 func TestScanCallbackAbort(t *testing.T) {
 	rs := &ast.RuleSet{
 		Rules: []*ast.Rule{

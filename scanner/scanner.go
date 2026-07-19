@@ -58,6 +58,7 @@ type (
 	// Rules holds compiled YARA rules ready for scanning.
 	Rules struct {
 		rules         []*compiledRule
+		zeroHitRules  []int32 // sorted indexes of rules that may match without hits
 		matcher       *ahocorasick.AhoCorasick
 		patterns      [][]byte
 		patternMap    []patternRef
@@ -168,7 +169,7 @@ func checkWordBoundary(buf []byte, start, end int) bool {
 // ScanMem scans a byte buffer for matching rules. A timeout of zero or less
 // means no timeout.
 func (r *Rules) ScanMem(buf []byte, flags ScanFlags, timeout time.Duration, cb ScanCallback) error {
-	if r.matcher == nil && len(r.regexPatterns) == 0 {
+	if len(r.rules) == 0 {
 		return nil
 	}
 
@@ -346,18 +347,31 @@ func (r *Rules) verifyAtoms(ctx context.Context, buf []byte, atoms []atomHit, hi
 	return hits, nil
 }
 
-// evaluateRules evaluates conditions for rules with hits, invokes the
-// callback for matching rules, and handles abort/timeout.
+// evaluateRules evaluates hit-bearing rules and rules whose conditions may
+// match without hits, invokes the callback, and handles abort/timeout.
 func (r *Rules) evaluateRules(ctx context.Context, buf []byte, hits []hit, cb ScanCallback) error {
-	// hits are sorted by slot, so each rule owns one contiguous run
-	for i := 0; i < len(hits); {
-		ruleIdx := r.slotRule[hits[i].slot]
-		j := i
-		for j < len(hits) && r.slotRule[hits[j].slot] == ruleIdx {
-			j++
+	// Both inputs are sorted by rule index. Merge them so the common case stays
+	// hit-driven while zero-hit-capable conditions are still evaluated in rule
+	// order. A rule present in both inputs is evaluated only once.
+	hitIdx := 0
+	zeroHitIdx := 0
+	for hitIdx < len(hits) || zeroHitIdx < len(r.zeroHitRules) {
+		ruleIdx := int32(len(r.rules))
+		if hitIdx < len(hits) {
+			ruleIdx = r.slotRule[hits[hitIdx].slot]
 		}
-		ruleHits := hits[i:j]
-		i = j
+		if zeroHitIdx < len(r.zeroHitRules) && r.zeroHitRules[zeroHitIdx] < ruleIdx {
+			ruleIdx = r.zeroHitRules[zeroHitIdx]
+		}
+
+		start := hitIdx
+		for hitIdx < len(hits) && r.slotRule[hits[hitIdx].slot] == ruleIdx {
+			hitIdx++
+		}
+		ruleHits := hits[start:hitIdx]
+		if zeroHitIdx < len(r.zeroHitRules) && r.zeroHitRules[zeroHitIdx] == ruleIdx {
+			zeroHitIdx++
+		}
 
 		select {
 		case <-ctx.Done():

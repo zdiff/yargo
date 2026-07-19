@@ -90,6 +90,9 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 			rules.slotRule = append(rules.slotRule, int32(ruleIdx))
 		}
 		rules.rules = append(rules.rules, cr)
+		if mayMatchWithoutHits(cr.condition) {
+			rules.zeroHitRules = append(rules.zeroHitRules, int32(ruleIdx))
+		}
 
 		for si, s := range r.Strings {
 			slot := cr.slotBase + int32(si)
