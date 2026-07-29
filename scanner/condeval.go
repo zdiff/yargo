@@ -197,37 +197,18 @@ func evalBinaryExpr(e ast.BinaryExpr, ctx *evalContext) bool {
 		return evalExpr(e.Left, ctx) && evalExpr(e.Right, ctx)
 	case "or":
 		return evalExpr(e.Left, ctx) || evalExpr(e.Right, ctx)
-	}
-
-	if !isIntComparisonOp(e.Op) {
-		return false
-	}
-
-	left := evalExprInt(e.Left, ctx)
-	right := evalExprInt(e.Right, ctx)
-
-	switch e.Op {
 	case "==":
-		return left == right
+		return evalExprInt(e.Left, ctx) == evalExprInt(e.Right, ctx)
 	case "!=":
-		return left != right
+		return evalExprInt(e.Left, ctx) != evalExprInt(e.Right, ctx)
 	case "<":
-		return left < right
+		return evalExprInt(e.Left, ctx) < evalExprInt(e.Right, ctx)
 	case ">":
-		return left > right
+		return evalExprInt(e.Left, ctx) > evalExprInt(e.Right, ctx)
 	case "<=":
-		return left <= right
+		return evalExprInt(e.Left, ctx) <= evalExprInt(e.Right, ctx)
 	case ">=":
-		return left >= right
-	default:
-		return false
-	}
-}
-
-func isIntComparisonOp(op string) bool {
-	switch op {
-	case "==", "!=", "<", ">", "<=", ">=":
-		return true
+		return evalExprInt(e.Left, ctx) >= evalExprInt(e.Right, ctx)
 	default:
 		return false
 	}
