@@ -466,6 +466,8 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 			return OF
 		case "them":
 			return THEM
+		case "filesize":
+			return FILESIZE
 		default:
 			lval.str = word
 			return COND_IDENT

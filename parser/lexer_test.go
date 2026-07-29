@@ -213,6 +213,19 @@ func TestLexEqOperator(t *testing.T) {
 	}
 }
 
+func TestLexFilesize(t *testing.T) {
+	tokens := collectTokens(`rule t { condition: filesize == 3 }`)
+	expected := []int{RULE, IDENT, '{', CONDITION, ':', FILESIZE, EQ, INT_LIT, '}'}
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d tokens, got %d", len(expected), len(tokens))
+	}
+	for i, tok := range tokens {
+		if tok.tok != expected[i] {
+			t.Errorf("token %d: expected %d, got %d", i, expected[i], tok.tok)
+		}
+	}
+}
+
 func TestLexFuncCall(t *testing.T) {
 	tokens := collectTokens(`rule t { strings: $ = "x" condition: uint32be(0) == 0x46 }`)
 	var found bool

@@ -8,7 +8,7 @@ Pure Go implementation of YARA, eliminating the need for go-yara/cgo dependencie
 - YARA rule parser (goyacc-based) with full syntax support
 - Multi-pattern scanner using a vendored [Aho-Corasick](ahocorasick/) automaton
 - Regex support via [go-re2](https://github.com/wasilibs/go-re2) (RE2 engine compiled to Wasm)
-- Condition evaluation: `and`, `or`, `not`, `at`, `any of`, `all of`, `uint*` functions, wildcards
+- Condition evaluation: `and`, `or`, `not`, `at`, `any of`, `all of`, `filesize`, `uint*` functions, wildcards
 - Support for `base64` and `fullword` string modifiers
 - Hex strings with wildcards (`??`), jumps (`[4-8]`), and alternations (`(AB|CD)`) compiled to regex
 - go-yara compatible scan API
@@ -98,11 +98,12 @@ Supported:
 - Positional matching: `$a at 0`
 - Boolean operators: `and`, `or`, `not`, parentheses
 - Comparison: `==`
+- File size: `filesize`
 - Byte functions: `uint32be(n)`, `uint16be(n)`, `uint32(n)`, `uint16(n)`, `uint8(n)`
 - Quantifiers: `any of them`, `all of them`, `any of ($prefix_*)`, `all of ($prefix_*)`
 
 Not yet supported:
-- `filesize`, `entrypoint`
+- `entrypoint`
 - String count/offset/length operators: `#a`, `@a`, `!a`
 - Numeric quantifiers: `2 of them`, `50% of them`
 - Loops: `for`, `of`

@@ -50,6 +50,9 @@ func mayMatchWithoutHits(expr ast.Expr) bool {
 	case ast.IntLit:
 		return e.Value != 0
 
+	case ast.Filesize:
+		return true
+
 	case ast.FuncCall:
 		return true
 
@@ -104,6 +107,9 @@ func evalExpr(expr ast.Expr, ctx *evalContext) bool {
 	case ast.IntLit:
 		return e.Value != 0
 
+	case ast.Filesize:
+		return len(ctx.buf) != 0
+
 	case ast.FuncCall:
 		return evalFuncCall(e, ctx) != 0
 
@@ -132,6 +138,8 @@ func evalExprInt(expr ast.Expr, ctx *evalContext) int64 {
 	switch e := expr.(type) {
 	case ast.IntLit:
 		return e.Value
+	case ast.Filesize:
+		return int64(len(ctx.buf))
 	case ast.FuncCall:
 		return evalFuncCall(e, ctx)
 	default:

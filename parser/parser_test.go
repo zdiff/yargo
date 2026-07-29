@@ -305,6 +305,38 @@ func TestParseConditionWithParens(t *testing.T) {
 	}
 }
 
+func TestParseFilesizeCondition(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want ast.Expr
+	}{
+		{
+			name: "truthy",
+			cond: `filesize`,
+			want: ast.Filesize{},
+		},
+		{
+			name: "comparison",
+			cond: `filesize == 3`,
+			want: ast.BinaryExpr{
+				Op:    "==",
+				Left:  ast.Filesize{},
+				Right: ast.IntLit{Value: 3},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := mustParse(t, `rule test { condition: `+tt.cond+` }`)
+			if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("condition = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseNotCondition(t *testing.T) {
 	tests := []struct {
 		name string
@@ -408,6 +440,7 @@ func TestParseInvalidInputs(t *testing.T) {
 		{"unterminated block comment", `rule t { /* comment`, "unterminated"},
 		{"integer overflow", `rule t { condition: 99999999999999999999 }`, "integer"},
 		{"hex integer overflow", `rule t { condition: 0xFFFFFFFFFFFFFFFFFF }`, "integer"},
+		{"unsupported bare identifier", `rule t { condition: entrypoint }`, "syntax error"},
 		{"non-ascii whitespace", "rule t \xa0{ condition: 0 }", "unexpected character"},
 	}
 	for _, tt := range tests {

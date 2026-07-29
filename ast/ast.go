@@ -142,6 +142,11 @@ type IntLit struct {
 
 func (IntLit) exprNode() {}
 
+// Filesize represents the bare filesize condition expression.
+type Filesize struct{}
+
+func (Filesize) exprNode() {}
+
 // FuncCall represents a function call like uint32be(0).
 type FuncCall struct {
 	Name string

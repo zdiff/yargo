@@ -672,6 +672,85 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 	}
 }
 
+func TestScanFilesizeWithoutStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+		rule size_eq {
+			condition:
+				filesize == 3
+		}
+
+		rule size_truthy {
+			condition:
+				filesize
+		}
+	`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("abc"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+	if matches[0].Rule != "size_eq" || matches[1].Rule != "size_truthy" {
+		t.Fatalf("matches = %+v, want size_eq then size_truthy", matches)
+	}
+	for _, match := range matches {
+		if len(match.Strings) != 0 {
+			t.Errorf("rule %q matched strings = %v, want none", match.Rule, match.Strings)
+		}
+	}
+
+	matches = nil
+	if err := rules.ScanMem(nil, 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() on empty buffer error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected 0 matches on empty buffer, got %d", len(matches))
+	}
+}
+
+func TestScanFilesizeWithoutStringHits(t *testing.T) {
+	rs, err := parser.New().Parse(`
+		rule size_only {
+			strings:
+				$a = "needle"
+			condition:
+				filesize == 3
+		}
+	`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("abc"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "size_only" {
+		t.Fatalf("matched rule = %q, want size_only", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 0 {
+		t.Errorf("matched strings = %v, want none", matches[0].Strings)
+	}
+}
+
 func TestScanNotCondition(t *testing.T) {
 	rs, err := parser.New().Parse(`
 		rule string_absent {

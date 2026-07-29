@@ -31,7 +31,7 @@ import (
 %token <num> INT_LIT
 %token <byt> HEX_BYTE
 %token HEX_WILDCARD
-%token AND OR NOT AT ANY ALL OF THEM EQ
+%token AND OR NOT AT ANY ALL OF THEM EQ FILESIZE
 
 %left OR
 %left AND
@@ -311,6 +311,10 @@ primary_expr:
 	| INT_LIT
 	{
 		$$ = ast.IntLit{Value: $1}
+	}
+	| FILESIZE
+	{
+		$$ = ast.Filesize{}
 	}
 	;
 

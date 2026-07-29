@@ -58,6 +58,7 @@ func TestMayMatchWithoutHits(t *testing.T) {
 		{name: "all of", expr: ast.AllOf{Pattern: "them"}, want: false},
 		{name: "false constant", expr: ast.IntLit{Value: 0}, want: false},
 		{name: "true constant", expr: ast.IntLit{Value: 1}, want: true},
+		{name: "filesize", expr: ast.Filesize{}, want: true},
 		{name: "byte function", expr: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}}, want: true},
 		{name: "byte comparison", expr: byteCheck, want: true},
 		{name: "not string reference", expr: ast.NotExpr{Inner: ast.StringRef{Name: "$a"}}, want: true},
@@ -135,6 +136,38 @@ func TestEvalAtExpr(t *testing.T) {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEvalFilesize(t *testing.T) {
+	tests := []struct {
+		name    string
+		buf     []byte
+		wantInt int64
+		want    bool
+	}{
+		{name: "empty", buf: nil, wantInt: 0, want: false},
+		{name: "non_empty", buf: []byte("abc"), wantInt: 3, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &evalContext{buf: tt.buf}
+			if got := evalExprInt(ast.Filesize{}, ctx); got != tt.wantInt {
+				t.Errorf("evalExprInt() = %d, want %d", got, tt.wantInt)
+			}
+			if got := evalExpr(ast.Filesize{}, ctx); got != tt.want {
+				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalFilesizeComparison(t *testing.T) {
+	expr := parseTestCondition(t, `filesize == 3`)
+	ctx := &evalContext{buf: []byte("abc"), stringNames: []string{"$x"}}
+	if got := evalExpr(expr, ctx); !got {
+		t.Fatal("evalExpr() = false, want true")
 	}
 }
 
