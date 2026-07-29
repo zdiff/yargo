@@ -454,6 +454,8 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 			return AND
 		case "or":
 			return OR
+		case "not":
+			return NOT
 		case "at":
 			return AT
 		case "any":

@@ -60,6 +60,9 @@ func TestMayMatchWithoutHits(t *testing.T) {
 		{name: "true constant", expr: ast.IntLit{Value: 1}, want: true},
 		{name: "byte function", expr: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}}, want: true},
 		{name: "byte comparison", expr: byteCheck, want: true},
+		{name: "not string reference", expr: ast.NotExpr{Inner: ast.StringRef{Name: "$a"}}, want: true},
+		{name: "not any of", expr: ast.NotExpr{Inner: ast.AnyOf{Pattern: "them"}}, want: true},
+		{name: "not byte comparison", expr: ast.NotExpr{Inner: byteCheck}, want: true},
 		{
 			name: "string or byte comparison",
 			expr: ast.BinaryExpr{Op: "or", Left: ast.StringRef{Name: "$a"}, Right: byteCheck},
@@ -275,6 +278,32 @@ func TestEvalOr(t *testing.T) {
 			ctx := &evalContext{hits: testHits(tt.matches), stringNames: stringNames}
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
+				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalNot(t *testing.T) {
+	tests := []struct {
+		name    string
+		cond    string
+		matches map[int][]int
+		want    bool
+	}{
+		{name: "absent string", cond: `not $a`, matches: map[int][]int{}, want: true},
+		{name: "present string", cond: `not $a`, matches: map[int][]int{0: {0}}, want: false},
+		{name: "parenthesized or", cond: `not ($a or $b)`, matches: map[int][]int{}, want: true},
+		{name: "parenthesized or with match", cond: `not ($a or $b)`, matches: map[int][]int{1: {0}}, want: false},
+		{name: "nested not", cond: `not not $a`, matches: map[int][]int{0: {0}}, want: true},
+		{name: "precedence", cond: `not $a and $b`, matches: map[int][]int{1: {0}}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := parseTestCondition(t, tt.cond)
+			ctx := &evalContext{hits: testHits(tt.matches), stringNames: []string{"$a", "$b"}}
+			if got := evalExpr(expr, ctx); got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
 			}
 		})

@@ -305,6 +305,69 @@ func TestParseConditionWithParens(t *testing.T) {
 	}
 }
 
+func TestParseNotCondition(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want ast.Expr
+	}{
+		{
+			name: "string reference",
+			cond: `not $a`,
+			want: ast.NotExpr{Inner: ast.StringRef{Name: "$a"}},
+		},
+		{
+			name: "parenthesized expression",
+			cond: `not ($a or $b)`,
+			want: ast.NotExpr{Inner: ast.ParenExpr{Inner: ast.BinaryExpr{
+				Op:    "or",
+				Left:  ast.StringRef{Name: "$a"},
+				Right: ast.StringRef{Name: "$b"},
+			}}},
+		},
+		{
+			name: "nested not",
+			cond: `not not $a`,
+			want: ast.NotExpr{Inner: ast.NotExpr{Inner: ast.StringRef{Name: "$a"}}},
+		},
+		{
+			name: "higher precedence than and",
+			cond: `not $a and $b`,
+			want: ast.BinaryExpr{
+				Op:    "and",
+				Left:  ast.NotExpr{Inner: ast.StringRef{Name: "$a"}},
+				Right: ast.StringRef{Name: "$b"},
+			},
+		},
+		{
+			name: "lower precedence than comparison",
+			cond: `not uint8(0) == 0`,
+			want: ast.NotExpr{Inner: ast.BinaryExpr{
+				Op:    "==",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0},
+			}},
+		},
+		{
+			name: "lower precedence than at",
+			cond: `not $a at 0`,
+			want: ast.NotExpr{Inner: ast.AtExpr{
+				Ref: ast.StringRef{Name: "$a"},
+				Pos: ast.IntLit{Value: 0},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := mustParse(t, `rule test { condition: `+tt.cond+` }`)
+			if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("condition = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseHexAltWithSpaces(t *testing.T) {
 	rs := mustParse(t, `rule test { strings: $ = { (AB | CD) EF } condition: any of them }`)
 	hex := rs.Rules[0].Strings[0].Value.(ast.HexString)

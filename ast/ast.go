@@ -159,6 +159,13 @@ type BinaryExpr struct {
 
 func (BinaryExpr) exprNode() {}
 
+// NotExpr represents a negated condition like "not $foo".
+type NotExpr struct {
+	Inner Expr
+}
+
+func (NotExpr) exprNode() {}
+
 // ParenExpr represents a parenthesized expression.
 type ParenExpr struct {
 	Inner Expr

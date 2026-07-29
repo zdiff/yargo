@@ -65,7 +65,7 @@ func TestLexHexString(t *testing.T) {
 }
 
 func TestLexConditionKeywords(t *testing.T) {
-	tokens := collectTokens(`rule t { strings: $ = "x" condition: $a and $b or any of them }`)
+	tokens := collectTokens(`rule t { strings: $ = "x" condition: not $a and $b or any of them }`)
 	// Find the condition tokens after CONDITION ':'
 	var condToks []int
 	foundCond := false
@@ -81,7 +81,7 @@ func TestLexConditionKeywords(t *testing.T) {
 			condToks = append(condToks, tok.tok)
 		}
 	}
-	expected := []int{COND_STRING_ID, AND, COND_STRING_ID, OR, ANY, OF, THEM, '}'}
+	expected := []int{NOT, COND_STRING_ID, AND, COND_STRING_ID, OR, ANY, OF, THEM, '}'}
 	if len(condToks) != len(expected) {
 		t.Fatalf("expected %d condition tokens, got %d: %v", len(expected), len(condToks), condToks)
 	}

@@ -53,6 +53,11 @@ func mayMatchWithoutHits(expr ast.Expr) bool {
 	case ast.FuncCall:
 		return true
 
+	case ast.NotExpr:
+		// Determining whether an arbitrary inner expression is false would
+		// require evaluating it against the buffer. Keep the rule eligible.
+		return true
+
 	case ast.BinaryExpr:
 		switch e.Op {
 		case "and":
@@ -104,6 +109,9 @@ func evalExpr(expr ast.Expr, ctx *evalContext) bool {
 
 	case ast.BinaryExpr:
 		return evalBinaryExpr(e, ctx)
+
+	case ast.NotExpr:
+		return !evalExpr(e.Inner, ctx)
 
 	case ast.ParenExpr:
 		return evalExpr(e.Inner, ctx)
