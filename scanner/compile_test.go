@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -151,6 +152,45 @@ func TestSkipSubtypes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCompileClassifiesFilesizeAsZeroHitCapable(t *testing.T) {
+	rs := &ast.RuleSet{Rules: []*ast.Rule{
+		{Name: "filesize", Condition: ast.Filesize{}},
+		{
+			Name:      "string_only",
+			Strings:   []*ast.StringDef{{Name: "$a", Value: ast.TextString{Value: "a"}}},
+			Condition: ast.StringRef{Name: "$a"},
+		},
+		{
+			Name:    "filesize_and_string",
+			Strings: []*ast.StringDef{{Name: "$a", Value: ast.TextString{Value: "a"}}},
+			Condition: ast.BinaryExpr{
+				Op:    "and",
+				Left:  ast.Filesize{},
+				Right: ast.StringRef{Name: "$a"},
+			},
+		},
+		{
+			Name:    "filesize_or_string",
+			Strings: []*ast.StringDef{{Name: "$a", Value: ast.TextString{Value: "a"}}},
+			Condition: ast.BinaryExpr{
+				Op:    "or",
+				Left:  ast.Filesize{},
+				Right: ast.StringRef{Name: "$a"},
+			},
+		},
+	}}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	want := []int32{0, 3}
+	if !slices.Equal(rules.zeroHitRules, want) {
+		t.Errorf("zeroHitRules = %v, want %v", rules.zeroHitRules, want)
 	}
 }
 

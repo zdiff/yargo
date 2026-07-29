@@ -410,6 +410,13 @@ rule plain {
 		$a = "needle"
 	condition:
 		any of them
+}
+
+rule private_rule {
+	strings:
+		$a = "needle" private
+	condition:
+		$a
 }`)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
@@ -418,8 +425,8 @@ rule plain {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	if got := rules.NumRules(); got != 1 {
-		t.Errorf("expected 1 compiled rule, got %d", got)
+	if got := rules.NumRules(); got != 2 {
+		t.Errorf("expected 2 compiled rules, got %d", got)
 	}
 
 	// a rule with an unsupported modifier must not match at all, even via
@@ -429,8 +436,107 @@ rule plain {
 	if err := rules.ScanMem([]byte("some needle here"), 0, time.Second, &matches); err != nil {
 		t.Fatalf("ScanMem() error = %v", err)
 	}
-	if len(matches) != 1 || matches[0].Rule != "plain" {
-		t.Errorf("expected only rule plain to match, got %v", matches)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %v", matches)
+	}
+	if matches[0].Rule != "plain" {
+		t.Errorf("expected first match to be plain, got %q", matches[0].Rule)
+	}
+	if matches[1].Rule != "private_rule" {
+		t.Errorf("expected second match to be private_rule, got %q", matches[1].Rule)
+	}
+	if len(matches[1].Strings) != 0 {
+		t.Errorf("expected private_rule to suppress private string matches, got %v", matches[1].Strings)
+	}
+}
+
+func TestCompilePreservesPrivateStringMetadata(t *testing.T) {
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{{
+			Name: "private_meta",
+			Strings: []*ast.StringDef{
+				{Name: "$public", Value: ast.TextString{Value: "visible"}},
+				{Name: "$secret", Value: ast.TextString{Value: "needle"}, Modifiers: ast.StringModifiers{Private: true}},
+			},
+			Condition: ast.AnyOf{Pattern: "them"},
+		}},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if got := rules.rules[0].stringPrivates; !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("compiled private metadata = %v, want [false true]", got)
+	}
+}
+
+func TestPrivateStringMatchRuleContainsNoPrivateStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule private_only {
+	strings:
+		$secret = "needle" private
+	condition:
+		$secret
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("haystack needle haystack"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "private_only" {
+		t.Fatalf("matched rule = %q, want private_only", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 0 {
+		t.Errorf("expected private-only match to report no strings, got %v", matches[0].Strings)
+	}
+}
+
+func TestMixedRuleMatchRuleOmitsPrivateStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule mixed_private {
+	strings:
+		$public = "visible"
+		$secret = "needle" private
+	condition:
+		$public and $secret
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("visible needle"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "mixed_private" {
+		t.Fatalf("matched rule = %q, want mixed_private", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 1 {
+		t.Fatalf("expected only the public string to be reported, got %v", matches[0].Strings)
+	}
+	if matches[0].Strings[0].Name != "$public" {
+		t.Errorf("reported string = %q, want $public", matches[0].Strings[0].Name)
+	}
+	if string(matches[0].Strings[0].Data) != "visible" {
+		t.Errorf("reported data = %q, want visible", matches[0].Strings[0].Data)
 	}
 }
 
@@ -601,6 +707,17 @@ func TestRuleWithNoStrings(t *testing.T) {
 }
 
 func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
+	comparisonRule := func(name, op string, right int64) *ast.Rule {
+		return &ast.Rule{
+			Name: name,
+			Condition: ast.BinaryExpr{
+				Op:    op,
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: right},
+			},
+		}
+	}
+
 	tests := []struct {
 		name string
 		rule *ast.Rule
@@ -614,18 +731,12 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 			},
 			data: []byte("any data"),
 		},
-		{
-			name: "byte condition without strings",
-			rule: &ast.Rule{
-				Name: "gif_magic",
-				Condition: ast.BinaryExpr{
-					Op:    "==",
-					Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
-					Right: ast.IntLit{Value: 0x47},
-				},
-			},
-			data: []byte("GIF"),
-		},
+		{name: "eq comparison without strings", rule: comparisonRule("gif_eq", "==", 0x47), data: []byte("GIF")},
+		{name: "ne comparison without strings", rule: comparisonRule("gif_ne", "!=", 0x46), data: []byte("GIF")},
+		{name: "lt comparison without strings", rule: comparisonRule("gif_lt", "<", 0x48), data: []byte("GIF")},
+		{name: "gt comparison without strings", rule: comparisonRule("gif_gt", ">", 0x46), data: []byte("GIF")},
+		{name: "le comparison without strings", rule: comparisonRule("gif_le", "<=", 0x47), data: []byte("GIF")},
+		{name: "ge comparison without strings", rule: comparisonRule("gif_ge", ">=", 0x47), data: []byte("GIF")},
 		{
 			name: "true non-string branch without a string hit",
 			rule: &ast.Rule{
@@ -637,7 +748,7 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 					Op:   "or",
 					Left: ast.StringRef{Name: "$a"},
 					Right: ast.BinaryExpr{
-						Op:    "==",
+						Op:    ">=",
 						Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 						Right: ast.IntLit{Value: 0x47},
 					},
@@ -669,6 +780,85 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 				t.Errorf("expected no matching strings, got %d", len(matches[0].Strings))
 			}
 		})
+	}
+}
+
+func TestScanFilesizeWithoutStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+		rule size_eq {
+			condition:
+				filesize == 3
+		}
+
+		rule size_truthy {
+			condition:
+				filesize
+		}
+	`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("abc"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+	if matches[0].Rule != "size_eq" || matches[1].Rule != "size_truthy" {
+		t.Fatalf("matches = %+v, want size_eq then size_truthy", matches)
+	}
+	for _, match := range matches {
+		if len(match.Strings) != 0 {
+			t.Errorf("rule %q matched strings = %v, want none", match.Rule, match.Strings)
+		}
+	}
+
+	matches = nil
+	if err := rules.ScanMem(nil, 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() on empty buffer error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected 0 matches on empty buffer, got %d", len(matches))
+	}
+}
+
+func TestScanFilesizeWithoutStringHits(t *testing.T) {
+	rs, err := parser.New().Parse(`
+		rule size_only {
+			strings:
+				$a = "needle"
+			condition:
+				filesize == 3
+		}
+	`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("abc"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "size_only" {
+		t.Fatalf("matched rule = %q, want size_only", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 0 {
+		t.Errorf("matched strings = %v, want none", matches[0].Strings)
 	}
 }
 
@@ -712,7 +902,7 @@ func TestScanNotCondition(t *testing.T) {
 
 func TestRulesWithAndWithoutHitsKeepCompilationOrder(t *testing.T) {
 	byteCheck := ast.BinaryExpr{
-		Op:    "==",
+		Op:    ">=",
 		Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 		Right: ast.IntLit{Value: 0x47},
 	}

@@ -139,10 +139,10 @@ func TestParseModifiers(t *testing.T) {
 		{`{ FF } base64`, ast.StringModifiers{Base64: true}},
 		{`"x" ascii`, ast.StringModifiers{Ascii: true}},
 		{`"x" nocase`, ast.StringModifiers{Nocase: true}},
+		{`"x" private`, ast.StringModifiers{Private: true}},
 		{`"x" wide`, ast.StringModifiers{Unsupported: []string{"wide"}}},
 		{`"x" xor`, ast.StringModifiers{Unsupported: []string{"xor"}}},
 		{`"x" base64wide`, ast.StringModifiers{Unsupported: []string{"base64wide"}}},
-		{`"x" private`, ast.StringModifiers{Unsupported: []string{"private"}}},
 		{`"x" wide xor nocase`, ast.StringModifiers{Nocase: true, Unsupported: []string{"wide", "xor"}}},
 		{`"x" xor(0x01-0xff)`, ast.StringModifiers{Unsupported: []string{"xor(0x01-0xff)"}}},
 		{`"x" xor ( 0x01 )`, ast.StringModifiers{Unsupported: []string{"xor( 0x01 )"}}},
@@ -184,7 +184,7 @@ rule first {
 
 rule second {
 	strings:
-		$b = "three" fullword
+		$b = "three" fullword private
 	condition:
 		any of them
 }`)
@@ -195,6 +195,44 @@ rule second {
 	}
 	if !reflect.DeepEqual(rs.Warnings, want) {
 		t.Errorf("expected warnings %q, got %q", want, rs.Warnings)
+	}
+}
+
+func TestParsePrivateModifierRules(t *testing.T) {
+	rs := mustParse(t, `
+rule private_only {
+	strings:
+		$secret = "needle" private
+	condition:
+		$secret
+}
+
+rule mixed {
+	strings:
+		$public = "visible"
+		$secret = "needle" private
+	condition:
+		$public and $secret
+}`)
+
+	if len(rs.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", rs.Warnings)
+	}
+
+	privateOnly := rs.Rules[0]
+	if len(privateOnly.Strings) != 1 || !privateOnly.Strings[0].Modifiers.Private {
+		t.Fatalf("expected private-only rule to preserve private modifier, got %+v", privateOnly.Strings)
+	}
+
+	mixed := rs.Rules[1]
+	if len(mixed.Strings) != 2 {
+		t.Fatalf("expected 2 strings in mixed rule, got %d", len(mixed.Strings))
+	}
+	if mixed.Strings[0].Modifiers.Private {
+		t.Errorf("expected $public to remain public")
+	}
+	if !mixed.Strings[1].Modifiers.Private {
+		t.Errorf("expected $secret to be private")
 	}
 }
 
@@ -305,6 +343,38 @@ func TestParseConditionWithParens(t *testing.T) {
 	}
 }
 
+func TestParseFilesizeCondition(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want ast.Expr
+	}{
+		{
+			name: "truthy",
+			cond: `filesize`,
+			want: ast.Filesize{},
+		},
+		{
+			name: "comparison",
+			cond: `filesize == 3`,
+			want: ast.BinaryExpr{
+				Op:    "==",
+				Left:  ast.Filesize{},
+				Right: ast.IntLit{Value: 3},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := mustParse(t, `rule test { condition: `+tt.cond+` }`)
+			if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("condition = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseNotCondition(t *testing.T) {
 	tests := []struct {
 		name string
@@ -391,6 +461,107 @@ func TestParseUppercaseHexInt(t *testing.T) {
 	}
 }
 
+func TestParseComparisonConditions(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want ast.Expr
+	}{
+		{
+			name: "eq",
+			cond: `uint8(0) == 1`,
+			want: ast.BinaryExpr{
+				Op:    "==",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "ne",
+			cond: `uint8(0) != 1`,
+			want: ast.BinaryExpr{
+				Op:    "!=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "lt",
+			cond: `uint8(0) < 1`,
+			want: ast.BinaryExpr{
+				Op:    "<",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "gt",
+			cond: `uint8(0) > 1`,
+			want: ast.BinaryExpr{
+				Op:    ">",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "le",
+			cond: `uint8(0) <= 1`,
+			want: ast.BinaryExpr{
+				Op:    "<=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "ge",
+			cond: `uint8(0) >= 1`,
+			want: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "parenthesized integer",
+			cond: `(filesize) >= 1`,
+			want: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.ParenExpr{Inner: ast.Filesize{}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := mustParse(t, `rule test { condition: `+tt.cond+` }`)
+			if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("condition = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseComparisonPrecedence(t *testing.T) {
+	rs := mustParse(t, `rule test { condition: not uint8(0) < 1 or $a and uint8(1) >= 2 }`)
+	want := ast.BinaryExpr{
+		Op: "or",
+		Left: ast.NotExpr{Inner: ast.BinaryExpr{
+			Op:    "<",
+			Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+			Right: ast.IntLit{Value: 1},
+		}},
+		Right: ast.BinaryExpr{
+			Op:    "and",
+			Left:  ast.StringRef{Name: "$a"},
+			Right: ast.BinaryExpr{Op: ">=", Left: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 1}}}, Right: ast.IntLit{Value: 2}},
+		},
+	}
+	if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, want) {
+		t.Errorf("condition = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -408,6 +579,12 @@ func TestParseInvalidInputs(t *testing.T) {
 		{"unterminated block comment", `rule t { /* comment`, "unterminated"},
 		{"integer overflow", `rule t { condition: 99999999999999999999 }`, "integer"},
 		{"hex integer overflow", `rule t { condition: 0xFFFFFFFFFFFFFFFFFF }`, "integer"},
+		{"unsupported bare identifier", `rule t { condition: entrypoint }`, "syntax error"},
+		{"string comparison left operand", `rule t { strings: $a = "a" condition: $a >= 0 }`, "integer operands"},
+		{"string comparison right operand", `rule t { strings: $a = "a" condition: 0 <= $a }`, "integer operands"},
+		{"quantifier comparison operand", `rule t { strings: $a = "a" condition: any of them == 1 }`, "integer operands"},
+		{"chained relational comparisons", `rule t { condition: 1 < 2 < 3 }`, "syntax error"},
+		{"chained equality comparisons", `rule t { condition: 1 == 1 == 1 }`, "syntax error"},
 		{"non-ascii whitespace", "rule t \xa0{ condition: 0 }", "unexpected character"},
 	}
 	for _, tt := range tests {

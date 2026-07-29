@@ -58,6 +58,12 @@ const (
 	OF             = 57369
 	THEM           = 57370
 	EQ             = 57371
+	NE             = 57372
+	LT             = 57373
+	GT             = 57374
+	LE             = 57375
+	GE             = 57376
+	FILESIZE       = 57377
 )
 
 var yyToknames = [...]string{
@@ -90,6 +96,12 @@ var yyToknames = [...]string{
 	"OF",
 	"THEM",
 	"EQ",
+	"NE",
+	"LT",
+	"GT",
+	"LE",
+	"GE",
+	"FILESIZE",
 	"'{'",
 	"'}'",
 	"':'",
@@ -107,87 +119,143 @@ const (
 	yyInitialStackSize = 16
 )
 
-//line yara.y:332
+//line yara.y:358
 
 //line yacctab:1
 var yyExca = [...]int8{
 	-1, 1,
 	1, -1,
 	-2, 0,
+	-1, 63,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 33,
+	-1, 64,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 34,
+	-1, 65,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 35,
+	-1, 66,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 36,
+	-1, 67,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 37,
+	-1, 68,
+	29, 0,
+	30, 0,
+	31, 0,
+	32, 0,
+	33, 0,
+	34, 0,
+	-2, 38,
 }
 
 const yyPrivate = 57344
 
-const yyLast = 98
+const yyLast = 125
 
 var yyAct = [...]int8{
-	28, 27, 34, 33, 34, 33, 82, 35, 81, 35,
-	72, 73, 29, 49, 31, 32, 31, 32, 61, 42,
-	41, 50, 59, 30, 62, 30, 40, 43, 60, 19,
-	36, 44, 45, 58, 18, 17, 79, 80, 22, 77,
-	78, 21, 16, 55, 56, 57, 52, 42, 53, 63,
-	65, 75, 42, 41, 6, 43, 43, 47, 25, 46,
-	43, 66, 48, 9, 71, 70, 74, 54, 26, 38,
-	67, 14, 15, 5, 83, 11, 12, 20, 10, 11,
-	12, 8, 12, 39, 4, 1, 64, 76, 69, 13,
-	68, 51, 24, 37, 23, 7, 3, 2,
+	28, 27, 43, 42, 83, 84, 93, 92, 72, 55,
+	44, 45, 46, 47, 48, 49, 34, 33, 70, 37,
+	73, 35, 69, 56, 41, 19, 29, 18, 31, 32,
+	71, 50, 51, 90, 91, 17, 88, 89, 36, 22,
+	53, 21, 16, 30, 61, 62, 63, 64, 65, 66,
+	67, 68, 34, 33, 86, 74, 76, 35, 43, 42,
+	6, 52, 54, 77, 31, 32, 44, 45, 46, 47,
+	48, 49, 78, 58, 36, 59, 25, 82, 43, 30,
+	81, 85, 26, 39, 5, 94, 44, 45, 46, 47,
+	48, 49, 44, 45, 46, 47, 48, 49, 9, 12,
+	60, 40, 10, 11, 12, 8, 14, 15, 11, 12,
+	4, 1, 20, 13, 75, 87, 80, 79, 57, 24,
+	38, 23, 7, 3, 2,
 }
 
 var yyPact = [...]int16{
-	-1000, -1000, 80, -1000, 65, 24, 73, 69, 75, 11,
-	3, 2, -3, 75, 10, 7, -1000, -1000, 58, -11,
-	-1, -1000, -1000, 61, 58, -1000, -7, 31, -1000, -11,
-	-11, 32, 30, 38, -21, -1000, -1000, -1000, -12, -1000,
-	37, -11, -11, -11, 27, -2, -6, -10, -9, -9,
-	52, -1000, -1000, -1000, -1000, 26, 27, -1000, -1000, -1000,
-	50, -1000, 49, -1000, -25, -1000, -1000, -1000, 54, 20,
-	-27, -29, -1000, -9, -1000, -1000, -1000, -1000, -1000, -1000,
-	-1000, -1000, -1000, -1000,
+	-1000, -1000, 106, -1000, 76, 24, 97, 102, 92, 5,
+	-3, -11, -13, 92, 4, 2, -1000, -1000, 72, 3,
+	-18, -1000, -1000, 75, 72, -1000, -15, 37, -1000, 3,
+	3, 34, 13, 38, -31, -1000, -1000, -1000, -1000, -16,
+	-1000, 64, 3, 3, 3, 3, 3, 3, 3, 3,
+	63, -19, -10, -20, 39, 39, 54, -1000, -1000, -1000,
+	-1000, 57, 63, -1000, -1000, -1000, -1000, -1000, -1000, -1000,
+	-1000, 65, -1000, 62, -1000, -37, -1000, -1000, -1000, 69,
+	17, -34, -35, -1000, 39, -1000, -1000, -1000, -1000, -1000,
+	-1000, -1000, -1000, -1000, -1000,
 }
 
 var yyPgo = [...]int8{
-	0, 97, 96, 95, 94, 93, 81, 92, 58, 91,
-	90, 88, 87, 1, 0, 63, 86, 85,
+	0, 124, 123, 122, 121, 120, 105, 119, 76, 118,
+	117, 116, 115, 1, 0, 98, 114, 111,
 }
 
 var yyR1 = [...]int8{
 	0, 17, 1, 1, 2, 2, 2, 2, 3, 4,
 	4, 5, 5, 6, 7, 7, 8, 9, 9, 9,
 	10, 10, 11, 11, 12, 12, 12, 12, 15, 13,
-	13, 13, 13, 13, 14, 14, 14, 14, 14, 14,
-	14, 14, 14, 16, 16, 16,
+	13, 13, 13, 13, 13, 13, 13, 13, 13, 14,
+	14, 14, 14, 14, 14, 14, 14, 14, 14, 16,
+	16, 16,
 }
 
 var yyR2 = [...]int8{
 	0, 1, 0, 2, 7, 6, 6, 5, 3, 0,
 	2, 3, 3, 3, 1, 2, 4, 1, 1, 3,
 	0, 2, 0, 2, 1, 1, 1, 1, 3, 1,
-	3, 3, 2, 3, 3, 3, 5, 3, 5, 3,
-	4, 1, 1, 0, 1, 3,
+	3, 3, 2, 3, 3, 3, 3, 3, 3, 3,
+	3, 5, 3, 5, 3, 4, 1, 1, 1, 0,
+	1, 3,
 }
 
 var yyChk = [...]int16{
-	-1000, -17, -1, -2, 4, 8, 30, -3, -6, -15,
-	5, 6, 7, -6, -15, -15, 31, 32, 32, 32,
-	-15, 31, 31, -4, -7, -8, 10, -13, -14, 23,
-	34, 25, 26, 14, 13, 18, 31, -5, 8, -8,
-	33, 22, 21, 29, -13, -13, 27, 27, 24, 34,
-	33, -9, 9, 11, 30, -13, -13, -13, 35, 28,
-	34, 28, 34, -14, -16, -14, 9, 18, -10, -11,
-	15, 15, 35, 36, 12, 31, -12, 19, 20, 16,
-	17, 35, 35, -14,
+	-1000, -17, -1, -2, 4, 8, 36, -3, -6, -15,
+	5, 6, 7, -6, -15, -15, 37, 38, 38, 38,
+	-15, 37, 37, -4, -7, -8, 10, -13, -14, 23,
+	40, 25, 26, 14, 13, 18, 35, 37, -5, 8,
+	-8, 39, 22, 21, 29, 30, 31, 32, 33, 34,
+	-13, -13, 27, 27, 24, 40, 39, -9, 9, 11,
+	36, -13, -13, -13, -13, -13, -13, -13, -13, 41,
+	28, 40, 28, 40, -14, -16, -14, 9, 18, -10,
+	-11, 15, 15, 41, 42, 12, 37, -12, 19, 20,
+	16, 17, 41, 41, -14,
 }
 
 var yyDef = [...]int8{
 	2, -2, 1, 3, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 7, 9, 0, 0,
 	0, 6, 5, 8, 13, 14, 0, 28, 29, 0,
-	0, 0, 0, 41, 0, 42, 4, 10, 0, 15,
-	0, 0, 0, 0, 32, 0, 0, 0, 0, 43,
-	0, 20, 17, 18, 22, 30, 31, 33, 34, 35,
-	0, 37, 0, 39, 0, 44, 11, 12, 16, 0,
-	0, 0, 40, 0, 21, 19, 23, 24, 25, 26,
-	27, 36, 38, 45,
+	0, 0, 0, 46, 0, 47, 48, 4, 10, 0,
+	15, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	32, 0, 0, 0, 0, 49, 0, 20, 17, 18,
+	22, 30, 31, -2, -2, -2, -2, -2, -2, 39,
+	40, 0, 42, 0, 44, 0, 50, 11, 12, 16,
+	0, 0, 0, 45, 0, 21, 19, 23, 24, 25,
+	26, 27, 41, 43, 51,
 }
 
 var yyTok1 = [...]int8{
@@ -195,21 +263,22 @@ var yyTok1 = [...]int8{
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-	34, 35, 3, 3, 36, 3, 3, 3, 3, 3,
-	3, 3, 3, 3, 3, 3, 3, 3, 32, 3,
-	3, 33, 3, 3, 3, 3, 3, 3, 3, 3,
+	40, 41, 3, 3, 42, 3, 3, 3, 3, 3,
+	3, 3, 3, 3, 3, 3, 3, 3, 38, 3,
+	3, 39, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-	3, 3, 3, 30, 3, 31,
+	3, 3, 3, 36, 3, 37,
 }
 
 var yyTok2 = [...]int8{
 	2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
 	12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-	22, 23, 24, 25, 26, 27, 28, 29,
+	22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+	32, 33, 34, 35,
 }
 
 var yyTok3 = [...]int8{
@@ -708,6 +777,8 @@ yydefault:
 				yyVAL.mods.Fullword = true
 			case "nocase":
 				yyVAL.mods.Nocase = true
+			case "private":
+				yyVAL.mods.Private = true
 			default:
 				// known-but-unimplemented (wide, xor, ...), argument forms of
 				// supported modifiers, or future modifiers; recorded so the
@@ -717,31 +788,31 @@ yydefault:
 		}
 	case 22:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line yara.y:212
+//line yara.y:214
 		{
 			yyVAL.hexTokens = nil
 		}
 	case 23:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line yara.y:216
+//line yara.y:218
 		{
 			yyVAL.hexTokens = append(yyDollar[1].hexTokens, yyDollar[2].hexToken)
 		}
 	case 24:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:223
+//line yara.y:225
 		{
 			yyVAL.hexToken = ast.HexByte{Value: yyDollar[1].byt}
 		}
 	case 25:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:227
+//line yara.y:229
 		{
 			yyVAL.hexToken = ast.HexWildcard{}
 		}
 	case 26:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:231
+//line yara.y:233
 		{
 			jump, err := parseHexJump(yyDollar[1].str)
 			if err != nil {
@@ -751,7 +822,7 @@ yydefault:
 		}
 	case 27:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:239
+//line yara.y:241
 		{
 			alt, err := parseHexAlt(yyDollar[1].str)
 			if err != nil {
@@ -761,109 +832,145 @@ yydefault:
 		}
 	case 28:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:250
+//line yara.y:252
 		{
 			yyVAL.expr = yyDollar[3].expr
 		}
 	case 29:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:257
+//line yara.y:259
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 30:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:261
+//line yara.y:263
 		{
 			yyVAL.expr = ast.BinaryExpr{Op: "or", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
 		}
 	case 31:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:265
+//line yara.y:267
 		{
 			yyVAL.expr = ast.BinaryExpr{Op: "and", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
 		}
 	case 32:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line yara.y:269
+//line yara.y:271
 		{
 			yyVAL.expr = ast.NotExpr{Inner: yyDollar[2].expr}
 		}
 	case 33:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:273
+//line yara.y:275
 		{
-			yyVAL.expr = ast.BinaryExpr{Op: "==", Left: yyDollar[1].expr, Right: yyDollar[3].expr}
+			yyVAL.expr = comparisonExpr(yylex, "==", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 34:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:280
+//line yara.y:279
 		{
-			yyVAL.expr = ast.ParenExpr{Inner: yyDollar[2].expr}
+			yyVAL.expr = comparisonExpr(yylex, "!=", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 35:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:284
+//line yara.y:283
 		{
-			yyVAL.expr = ast.AnyOf{Pattern: "them"}
+			yyVAL.expr = comparisonExpr(yylex, "<", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 36:
-		yyDollar = yyS[yypt-5 : yypt+1]
-//line yara.y:288
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line yara.y:287
 		{
-			yyVAL.expr = ast.AnyOf{Pattern: yyDollar[4].str}
+			yyVAL.expr = comparisonExpr(yylex, ">", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 37:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:292
+//line yara.y:291
 		{
-			yyVAL.expr = ast.AllOf{Pattern: "them"}
+			yyVAL.expr = comparisonExpr(yylex, "<=", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 38:
-		yyDollar = yyS[yypt-5 : yypt+1]
-//line yara.y:296
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line yara.y:295
 		{
-			yyVAL.expr = ast.AllOf{Pattern: yyDollar[4].str}
+			yyVAL.expr = comparisonExpr(yylex, ">=", yyDollar[1].expr, yyDollar[3].expr)
 		}
 	case 39:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:300
+//line yara.y:302
+		{
+			yyVAL.expr = ast.ParenExpr{Inner: yyDollar[2].expr}
+		}
+	case 40:
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line yara.y:306
+		{
+			yyVAL.expr = ast.AnyOf{Pattern: "them"}
+		}
+	case 41:
+		yyDollar = yyS[yypt-5 : yypt+1]
+//line yara.y:310
+		{
+			yyVAL.expr = ast.AnyOf{Pattern: yyDollar[4].str}
+		}
+	case 42:
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line yara.y:314
+		{
+			yyVAL.expr = ast.AllOf{Pattern: "them"}
+		}
+	case 43:
+		yyDollar = yyS[yypt-5 : yypt+1]
+//line yara.y:318
+		{
+			yyVAL.expr = ast.AllOf{Pattern: yyDollar[4].str}
+		}
+	case 44:
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line yara.y:322
 		{
 			yyVAL.expr = ast.AtExpr{Ref: ast.StringRef{Name: yyDollar[1].str}, Pos: yyDollar[3].expr}
 		}
-	case 40:
+	case 45:
 		yyDollar = yyS[yypt-4 : yypt+1]
-//line yara.y:304
+//line yara.y:326
 		{
 			yyVAL.expr = ast.FuncCall{Name: yyDollar[1].str, Args: yyDollar[3].exprs}
 		}
-	case 41:
+	case 46:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:308
+//line yara.y:330
 		{
 			yyVAL.expr = ast.StringRef{Name: yyDollar[1].str}
 		}
-	case 42:
+	case 47:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:312
+//line yara.y:334
 		{
 			yyVAL.expr = ast.IntLit{Value: yyDollar[1].num}
 		}
-	case 43:
+	case 48:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line yara.y:338
+		{
+			yyVAL.expr = ast.Filesize{}
+		}
+	case 49:
 		yyDollar = yyS[yypt-0 : yypt+1]
-//line yara.y:319
+//line yara.y:345
 		{
 			yyVAL.exprs = nil
 		}
-	case 44:
+	case 50:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line yara.y:323
+//line yara.y:349
 		{
 			yyVAL.exprs = []ast.Expr{yyDollar[1].expr}
 		}
-	case 45:
+	case 51:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line yara.y:327
+//line yara.y:353
 		{
 			yyVAL.exprs = append(yyDollar[1].exprs, yyDollar[3].expr)
 		}

@@ -20,6 +20,24 @@ func New() *Parser {
 	return &Parser{}
 }
 
+func comparisonExpr(lexer interface{ Error(string) }, op string, left, right ast.Expr) ast.Expr {
+	if !isIntegerExpr(left) || !isIntegerExpr(right) {
+		lexer.Error("comparison requires integer operands")
+	}
+	return ast.BinaryExpr{Op: op, Left: left, Right: right}
+}
+
+func isIntegerExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case ast.IntLit, ast.Filesize, ast.FuncCall:
+		return true
+	case ast.ParenExpr:
+		return isIntegerExpr(e.Inner)
+	default:
+		return false
+	}
+}
+
 // Parse parses YARA rules from a string. Constructs that parse but cannot be
 // honored, such as unsupported string modifiers, are reported in the returned
 // RuleSet's Warnings instead of failing the parse.
@@ -43,7 +61,8 @@ func collectWarnings(rs *ast.RuleSet) {
 		for _, s := range r.Strings {
 			for _, mod := range s.Modifiers.Unsupported {
 				rs.Warnings = append(rs.Warnings, fmt.Sprintf(
-					"rule %q string %s: unsupported modifier %q, rule will not match", r.Name, s.Name, mod))
+					"rule %q string %s: unsupported modifier %q, rule will not match", r.Name, s.Name, mod,
+				))
 			}
 		}
 	}

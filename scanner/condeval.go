@@ -50,6 +50,9 @@ func mayMatchWithoutHits(expr ast.Expr) bool {
 	case ast.IntLit:
 		return e.Value != 0
 
+	case ast.Filesize:
+		return true
+
 	case ast.FuncCall:
 		return true
 
@@ -64,8 +67,6 @@ func mayMatchWithoutHits(expr ast.Expr) bool {
 			return mayMatchWithoutHits(e.Left) && mayMatchWithoutHits(e.Right)
 		case "or":
 			return mayMatchWithoutHits(e.Left) || mayMatchWithoutHits(e.Right)
-		case "==":
-			return true
 		default:
 			return true
 		}
@@ -104,6 +105,9 @@ func evalExpr(expr ast.Expr, ctx *evalContext) bool {
 	case ast.IntLit:
 		return e.Value != 0
 
+	case ast.Filesize:
+		return len(ctx.buf) != 0
+
 	case ast.FuncCall:
 		return evalFuncCall(e, ctx) != 0
 
@@ -132,6 +136,10 @@ func evalExprInt(expr ast.Expr, ctx *evalContext) int64 {
 	switch e := expr.(type) {
 	case ast.IntLit:
 		return e.Value
+	case ast.Filesize:
+		return int64(len(ctx.buf))
+	case ast.ParenExpr:
+		return evalExprInt(e.Inner, ctx)
 	case ast.FuncCall:
 		return evalFuncCall(e, ctx)
 	default:
@@ -191,6 +199,16 @@ func evalBinaryExpr(e ast.BinaryExpr, ctx *evalContext) bool {
 		return evalExpr(e.Left, ctx) || evalExpr(e.Right, ctx)
 	case "==":
 		return evalExprInt(e.Left, ctx) == evalExprInt(e.Right, ctx)
+	case "!=":
+		return evalExprInt(e.Left, ctx) != evalExprInt(e.Right, ctx)
+	case "<":
+		return evalExprInt(e.Left, ctx) < evalExprInt(e.Right, ctx)
+	case ">":
+		return evalExprInt(e.Left, ctx) > evalExprInt(e.Right, ctx)
+	case "<=":
+		return evalExprInt(e.Left, ctx) <= evalExprInt(e.Right, ctx)
+	case ">=":
+		return evalExprInt(e.Left, ctx) >= evalExprInt(e.Right, ctx)
 	default:
 		return false
 	}

@@ -200,16 +200,75 @@ func TestLexMultipleRules(t *testing.T) {
 	}
 }
 
-func TestLexEqOperator(t *testing.T) {
-	tokens := collectTokens(`rule t { strings: $ = "x" condition: uint32be(0) == 0x46 }`)
-	var found bool
+func TestLexComparisonOperators(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want int
+	}{
+		{name: "eq", cond: `uint32be(0) == 0x46`, want: EQ},
+		{name: "ne", cond: `uint32be(0) != 0x46`, want: NE},
+		{name: "lt", cond: `uint32be(0) < 0x46`, want: LT},
+		{name: "gt", cond: `uint32be(0) > 0x46`, want: GT},
+		{name: "le", cond: `uint32be(0) <= 0x46`, want: LE},
+		{name: "ge", cond: `uint32be(0) >= 0x46`, want: GE},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := collectTokens(`rule t { strings: $ = "x" condition: ` + tt.cond + ` }`)
+			var found bool
+			for _, tok := range tokens {
+				if tok.tok == tt.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("comparison token %d not found in %q", tt.want, tt.cond)
+			}
+		})
+	}
+}
+
+func TestLexComparisonOperatorsUseLongestTokenMatch(t *testing.T) {
+	tokens := collectTokens(`rule t { strings: $ = "x" condition: uint8(0) <= 0x46 and uint8(1) >= 0x47 and uint8(2) != 0x48 and uint8(3) < 0x49 and uint8(4) > 0x4A and uint8(5) == 0x4B }`)
+	got := make([]int, 0, 7)
+	inCondition := false
 	for _, tok := range tokens {
-		if tok.tok == EQ {
-			found = true
+		if tok.tok == CONDITION {
+			inCondition = true
+			continue
+		}
+		if !inCondition || tok.tok == ':' {
+			continue
+		}
+		switch tok.tok {
+		case LE, GE, NE, LT, GT, EQ, '=':
+			got = append(got, tok.tok)
 		}
 	}
-	if !found {
-		t.Error("EQ token not found")
+
+	want := []int{LE, GE, NE, LT, GT, EQ}
+	if len(got) != len(want) {
+		t.Fatalf("comparison tokens = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("comparison tokens = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestLexFilesize(t *testing.T) {
+	tokens := collectTokens(`rule t { condition: filesize == 3 }`)
+	expected := []int{RULE, IDENT, '{', CONDITION, ':', FILESIZE, EQ, INT_LIT, '}'}
+	if len(tokens) != len(expected) {
+		t.Fatalf("expected %d tokens, got %d", len(expected), len(tokens))
+	}
+	for i, tok := range tokens {
+		if tok.tok != expected[i] {
+			t.Errorf("token %d: expected %d, got %d", i, expected[i], tok.tok)
+		}
 	}
 }
 

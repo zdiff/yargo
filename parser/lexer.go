@@ -428,13 +428,8 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 	case ',':
 		l.pos++
 		return ','
-	case '=':
-		if l.pos+1 < len(l.input) && l.input[l.pos+1] == '=' {
-			l.pos += 2
-			return EQ
-		}
-		l.pos++
-		return '='
+	case '!', '<', '>', '=':
+		return l.lexConditionOp()
 	case '$':
 		return l.lexCondStringRef(lval)
 	}
@@ -466,6 +461,8 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 			return OF
 		case "them":
 			return THEM
+		case "filesize":
+			return FILESIZE
 		default:
 			lval.str = word
 			return COND_IDENT
@@ -475,6 +472,41 @@ func (l *yaraLexer) lexCondition(lval *yySymType) int {
 	l.pos++
 	l.errorf("unexpected character %q in condition", ch)
 	return 0
+}
+
+func (l *yaraLexer) lexConditionOp() int {
+	if l.pos+1 < len(l.input) {
+		switch l.input[l.pos : l.pos+2] {
+		case "!=":
+			l.pos += 2
+			return NE
+		case "<=":
+			l.pos += 2
+			return LE
+		case ">=":
+			l.pos += 2
+			return GE
+		case "==":
+			l.pos += 2
+			return EQ
+		}
+	}
+
+	switch l.input[l.pos] {
+	case '<':
+		l.pos++
+		return LT
+	case '>':
+		l.pos++
+		return GT
+	case '=':
+		l.pos++
+		return '='
+	default:
+		l.pos++
+		l.errorf("unexpected character %q in condition", l.input[l.pos-1])
+		return 0
+	}
 }
 
 func (l *yaraLexer) lexCondStringRef(lval *yySymType) int {

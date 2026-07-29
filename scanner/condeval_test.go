@@ -58,6 +58,7 @@ func TestMayMatchWithoutHits(t *testing.T) {
 		{name: "all of", expr: ast.AllOf{Pattern: "them"}, want: false},
 		{name: "false constant", expr: ast.IntLit{Value: 0}, want: false},
 		{name: "true constant", expr: ast.IntLit{Value: 1}, want: true},
+		{name: "filesize", expr: ast.Filesize{}, want: true},
 		{name: "byte function", expr: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}}, want: true},
 		{name: "byte comparison", expr: byteCheck, want: true},
 		{name: "not string reference", expr: ast.NotExpr{Inner: ast.StringRef{Name: "$a"}}, want: true},
@@ -78,12 +79,33 @@ func TestMayMatchWithoutHits(t *testing.T) {
 			expr: ast.ParenExpr{Inner: byteCheck},
 			want: true,
 		},
+		{
+			name: "unknown binary operation is conservative",
+			expr: ast.BinaryExpr{Op: "future", Left: ast.IntLit{Value: 0}, Right: ast.IntLit{Value: 0}},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := mayMatchWithoutHits(tt.expr); got != tt.want {
 				t.Errorf("mayMatchWithoutHits() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMayMatchWithoutHitsComparisonOperators(t *testing.T) {
+	ops := []string{"==", "!=", "<", ">", "<=", ">="}
+	for _, op := range ops {
+		t.Run(op, func(t *testing.T) {
+			expr := ast.BinaryExpr{
+				Op:    op,
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x47},
+			}
+			if !mayMatchWithoutHits(expr) {
+				t.Fatal("comparison should remain eligible without string hits")
 			}
 		})
 	}
@@ -133,6 +155,43 @@ func TestEvalAtExpr(t *testing.T) {
 			got := evalExpr(expr, ctx)
 			if got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalFilesize(t *testing.T) {
+	tests := []struct {
+		name    string
+		buf     []byte
+		wantInt int64
+		want    bool
+	}{
+		{name: "empty", buf: nil, wantInt: 0, want: false},
+		{name: "non_empty", buf: []byte("abc"), wantInt: 3, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &evalContext{buf: tt.buf}
+			if got := evalExprInt(ast.Filesize{}, ctx); got != tt.wantInt {
+				t.Errorf("evalExprInt() = %d, want %d", got, tt.wantInt)
+			}
+			if got := evalExpr(ast.Filesize{}, ctx); got != tt.want {
+				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalFilesizeComparison(t *testing.T) {
+	tests := []string{`filesize == 3`, `(filesize) >= 3`}
+	for _, cond := range tests {
+		t.Run(cond, func(t *testing.T) {
+			expr := parseTestCondition(t, cond)
+			ctx := &evalContext{buf: []byte("abc"), stringNames: []string{"$x"}}
+			if got := evalExpr(expr, ctx); !got {
+				t.Fatal("evalExpr() = false, want true")
 			}
 		})
 	}
@@ -190,31 +249,112 @@ func TestEvalComparison(t *testing.T) {
 		want bool
 	}{
 		{
-			"gif89a_magic",
-			ast.BinaryExpr{
+			name: "eq true",
+			expr: ast.BinaryExpr{
 				Op:    "==",
 				Left:  ast.FuncCall{Name: "uint32be", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 				Right: ast.IntLit{Value: 0x47494638},
 			},
-			true,
+			want: true,
 		},
 		{
-			"gif89a_version",
-			ast.BinaryExpr{
-				Op:    "==",
-				Left:  ast.FuncCall{Name: "uint16be", Args: []ast.Expr{ast.IntLit{Value: 4}}},
-				Right: ast.IntLit{Value: 0x3961},
-			},
-			true,
-		},
-		{
-			"wrong_magic",
-			ast.BinaryExpr{
+			name: "eq false",
+			expr: ast.BinaryExpr{
 				Op:    "==",
 				Left:  ast.FuncCall{Name: "uint32be", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 				Right: ast.IntLit{Value: 0xDEADBEEF},
 			},
-			false,
+			want: false,
+		},
+		{
+			name: "ne true",
+			expr: ast.BinaryExpr{
+				Op:    "!=",
+				Left:  ast.FuncCall{Name: "uint16be", Args: []ast.Expr{ast.IntLit{Value: 4}}},
+				Right: ast.IntLit{Value: 0x3761},
+			},
+			want: true,
+		},
+		{
+			name: "ne false",
+			expr: ast.BinaryExpr{
+				Op:    "!=",
+				Left:  ast.FuncCall{Name: "uint16be", Args: []ast.Expr{ast.IntLit{Value: 4}}},
+				Right: ast.IntLit{Value: 0x3961},
+			},
+			want: false,
+		},
+		{
+			name: "lt true",
+			expr: ast.BinaryExpr{
+				Op:    "<",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x48},
+			},
+			want: true,
+		},
+		{
+			name: "lt false",
+			expr: ast.BinaryExpr{
+				Op:    "<",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x47},
+			},
+			want: false,
+		},
+		{
+			name: "gt true",
+			expr: ast.BinaryExpr{
+				Op:    ">",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x46},
+			},
+			want: true,
+		},
+		{
+			name: "gt false",
+			expr: ast.BinaryExpr{
+				Op:    ">",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x47},
+			},
+			want: false,
+		},
+		{
+			name: "le true",
+			expr: ast.BinaryExpr{
+				Op:    "<=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x47},
+			},
+			want: true,
+		},
+		{
+			name: "le false",
+			expr: ast.BinaryExpr{
+				Op:    "<=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x46},
+			},
+			want: false,
+		},
+		{
+			name: "ge true",
+			expr: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x47},
+			},
+			want: true,
+		},
+		{
+			name: "ge false",
+			expr: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 0x48},
+			},
+			want: false,
 		},
 	}
 	for _, tt := range tests {
@@ -222,6 +362,39 @@ func TestEvalComparison(t *testing.T) {
 			ctx := &evalContext{hits: nil, buf: buf}
 			got := evalExpr(tt.expr, ctx)
 			if got != tt.want {
+				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalComparisonPrecedence(t *testing.T) {
+	buf := []byte("GIF")
+	tests := []struct {
+		name    string
+		cond    string
+		matches map[int][]int
+		want    bool
+	}{
+		{
+			name:    "not binds looser than comparison and or binds looser than and",
+			cond:    `not uint8(0) < 0x47 or $a and uint8(1) >= 0x50`,
+			matches: map[int][]int{},
+			want:    true,
+		},
+		{
+			name:    "right branch requires both string and comparison",
+			cond:    `not uint8(0) < 0x48 or $a and uint8(1) >= 0x49`,
+			matches: map[int][]int{0: {0}},
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr := parseTestCondition(t, tt.cond)
+			ctx := &evalContext{hits: testHits(tt.matches), buf: buf, stringNames: []string{"$a"}}
+			if got := evalExpr(expr, ctx); got != tt.want {
 				t.Errorf("evalExpr() = %v, want %v", got, tt.want)
 			}
 		})
