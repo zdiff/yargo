@@ -156,7 +156,7 @@ type FuncCall struct {
 
 func (FuncCall) exprNode() {}
 
-// BinaryExpr represents a binary operation (and, or, ==).
+// BinaryExpr represents a binary operation like and, or, or an integer comparison.
 type BinaryExpr struct {
 	Op    string
 	Left  Expr

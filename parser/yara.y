@@ -31,12 +31,12 @@ import (
 %token <num> INT_LIT
 %token <byt> HEX_BYTE
 %token HEX_WILDCARD
-%token AND OR NOT AT ANY ALL OF THEM EQ FILESIZE
+%token AND OR NOT AT ANY ALL OF THEM EQ NE LT GT LE GE FILESIZE
 
 %left OR
 %left AND
 %right NOT
-%left EQ
+%nonassoc EQ NE LT GT LE GE
 %nonassoc AT
 
 %type <rules> rule_list
@@ -273,7 +273,27 @@ expr:
 	}
 	| expr EQ expr
 	{
-		$$ = ast.BinaryExpr{Op: "==", Left: $1, Right: $3}
+		$$ = comparisonExpr(yylex, "==", $1, $3)
+	}
+	| expr NE expr
+	{
+		$$ = comparisonExpr(yylex, "!=", $1, $3)
+	}
+	| expr LT expr
+	{
+		$$ = comparisonExpr(yylex, "<", $1, $3)
+	}
+	| expr GT expr
+	{
+		$$ = comparisonExpr(yylex, ">", $1, $3)
+	}
+	| expr LE expr
+	{
+		$$ = comparisonExpr(yylex, "<=", $1, $3)
+	}
+	| expr GE expr
+	{
+		$$ = comparisonExpr(yylex, ">=", $1, $3)
 	}
 	;
 

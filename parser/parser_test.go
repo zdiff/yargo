@@ -461,6 +461,107 @@ func TestParseUppercaseHexInt(t *testing.T) {
 	}
 }
 
+func TestParseComparisonConditions(t *testing.T) {
+	tests := []struct {
+		name string
+		cond string
+		want ast.Expr
+	}{
+		{
+			name: "eq",
+			cond: `uint8(0) == 1`,
+			want: ast.BinaryExpr{
+				Op:    "==",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "ne",
+			cond: `uint8(0) != 1`,
+			want: ast.BinaryExpr{
+				Op:    "!=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "lt",
+			cond: `uint8(0) < 1`,
+			want: ast.BinaryExpr{
+				Op:    "<",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "gt",
+			cond: `uint8(0) > 1`,
+			want: ast.BinaryExpr{
+				Op:    ">",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "le",
+			cond: `uint8(0) <= 1`,
+			want: ast.BinaryExpr{
+				Op:    "<=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "ge",
+			cond: `uint8(0) >= 1`,
+			want: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+		{
+			name: "parenthesized integer",
+			cond: `(filesize) >= 1`,
+			want: ast.BinaryExpr{
+				Op:    ">=",
+				Left:  ast.ParenExpr{Inner: ast.Filesize{}},
+				Right: ast.IntLit{Value: 1},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := mustParse(t, `rule test { condition: `+tt.cond+` }`)
+			if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("condition = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseComparisonPrecedence(t *testing.T) {
+	rs := mustParse(t, `rule test { condition: not uint8(0) < 1 or $a and uint8(1) >= 2 }`)
+	want := ast.BinaryExpr{
+		Op: "or",
+		Left: ast.NotExpr{Inner: ast.BinaryExpr{
+			Op:    "<",
+			Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+			Right: ast.IntLit{Value: 1},
+		}},
+		Right: ast.BinaryExpr{
+			Op:    "and",
+			Left:  ast.StringRef{Name: "$a"},
+			Right: ast.BinaryExpr{Op: ">=", Left: ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 1}}}, Right: ast.IntLit{Value: 2}},
+		},
+	}
+	if got := rs.Rules[0].Condition; !reflect.DeepEqual(got, want) {
+		t.Errorf("condition = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -479,6 +580,11 @@ func TestParseInvalidInputs(t *testing.T) {
 		{"integer overflow", `rule t { condition: 99999999999999999999 }`, "integer"},
 		{"hex integer overflow", `rule t { condition: 0xFFFFFFFFFFFFFFFFFF }`, "integer"},
 		{"unsupported bare identifier", `rule t { condition: entrypoint }`, "syntax error"},
+		{"string comparison left operand", `rule t { strings: $a = "a" condition: $a >= 0 }`, "integer operands"},
+		{"string comparison right operand", `rule t { strings: $a = "a" condition: 0 <= $a }`, "integer operands"},
+		{"quantifier comparison operand", `rule t { strings: $a = "a" condition: any of them == 1 }`, "integer operands"},
+		{"chained relational comparisons", `rule t { condition: 1 < 2 < 3 }`, "syntax error"},
+		{"chained equality comparisons", `rule t { condition: 1 == 1 == 1 }`, "syntax error"},
 		{"non-ascii whitespace", "rule t \xa0{ condition: 0 }", "unexpected character"},
 	}
 	for _, tt := range tests {

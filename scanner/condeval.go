@@ -67,8 +67,6 @@ func mayMatchWithoutHits(expr ast.Expr) bool {
 			return mayMatchWithoutHits(e.Left) && mayMatchWithoutHits(e.Right)
 		case "or":
 			return mayMatchWithoutHits(e.Left) || mayMatchWithoutHits(e.Right)
-		case "==":
-			return true
 		default:
 			return true
 		}
@@ -140,6 +138,8 @@ func evalExprInt(expr ast.Expr, ctx *evalContext) int64 {
 		return e.Value
 	case ast.Filesize:
 		return int64(len(ctx.buf))
+	case ast.ParenExpr:
+		return evalExprInt(e.Inner, ctx)
 	case ast.FuncCall:
 		return evalFuncCall(e, ctx)
 	default:
@@ -197,8 +197,37 @@ func evalBinaryExpr(e ast.BinaryExpr, ctx *evalContext) bool {
 		return evalExpr(e.Left, ctx) && evalExpr(e.Right, ctx)
 	case "or":
 		return evalExpr(e.Left, ctx) || evalExpr(e.Right, ctx)
+	}
+
+	if !isIntComparisonOp(e.Op) {
+		return false
+	}
+
+	left := evalExprInt(e.Left, ctx)
+	right := evalExprInt(e.Right, ctx)
+
+	switch e.Op {
 	case "==":
-		return evalExprInt(e.Left, ctx) == evalExprInt(e.Right, ctx)
+		return left == right
+	case "!=":
+		return left != right
+	case "<":
+		return left < right
+	case ">":
+		return left > right
+	case "<=":
+		return left <= right
+	case ">=":
+		return left >= right
+	default:
+		return false
+	}
+}
+
+func isIntComparisonOp(op string) bool {
+	switch op {
+	case "==", "!=", "<", ">", "<=", ">=":
+		return true
 	default:
 		return false
 	}

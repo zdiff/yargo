@@ -97,7 +97,7 @@ Supported:
 - String references: `$a`, `$b`
 - Positional matching: `$a at 0`
 - Boolean operators: `and`, `or`, `not`, parentheses
-- Comparison: `==`
+- Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
 - File size: `filesize`
 - Byte functions: `uint32be(n)`, `uint16be(n)`, `uint32(n)`, `uint16(n)`, `uint8(n)`
 - Quantifiers: `any of them`, `all of them`, `any of ($prefix_*)`, `all of ($prefix_*)`
@@ -109,7 +109,6 @@ Not yet supported:
 - Loops: `for`, `of`
 - Arithmetic operators: `+`, `-`, `*`, `/`, `%`
 - Bitwise operators: `&`, `|`, `^`, `~`, `<<`, `>>`
-- Other comparisons: `!=`, `<`, `>`, `<=`, `>=`
 
 ### String Types
 

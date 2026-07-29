@@ -707,6 +707,17 @@ func TestRuleWithNoStrings(t *testing.T) {
 }
 
 func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
+	comparisonRule := func(name, op string, right int64) *ast.Rule {
+		return &ast.Rule{
+			Name: name,
+			Condition: ast.BinaryExpr{
+				Op:    op,
+				Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
+				Right: ast.IntLit{Value: right},
+			},
+		}
+	}
+
 	tests := []struct {
 		name string
 		rule *ast.Rule
@@ -720,18 +731,12 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 			},
 			data: []byte("any data"),
 		},
-		{
-			name: "byte condition without strings",
-			rule: &ast.Rule{
-				Name: "gif_magic",
-				Condition: ast.BinaryExpr{
-					Op:    "==",
-					Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
-					Right: ast.IntLit{Value: 0x47},
-				},
-			},
-			data: []byte("GIF"),
-		},
+		{name: "eq comparison without strings", rule: comparisonRule("gif_eq", "==", 0x47), data: []byte("GIF")},
+		{name: "ne comparison without strings", rule: comparisonRule("gif_ne", "!=", 0x46), data: []byte("GIF")},
+		{name: "lt comparison without strings", rule: comparisonRule("gif_lt", "<", 0x48), data: []byte("GIF")},
+		{name: "gt comparison without strings", rule: comparisonRule("gif_gt", ">", 0x46), data: []byte("GIF")},
+		{name: "le comparison without strings", rule: comparisonRule("gif_le", "<=", 0x47), data: []byte("GIF")},
+		{name: "ge comparison without strings", rule: comparisonRule("gif_ge", ">=", 0x47), data: []byte("GIF")},
 		{
 			name: "true non-string branch without a string hit",
 			rule: &ast.Rule{
@@ -743,7 +748,7 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 					Op:   "or",
 					Left: ast.StringRef{Name: "$a"},
 					Right: ast.BinaryExpr{
-						Op:    "==",
+						Op:    ">=",
 						Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 						Right: ast.IntLit{Value: 0x47},
 					},
@@ -897,7 +902,7 @@ func TestScanNotCondition(t *testing.T) {
 
 func TestRulesWithAndWithoutHitsKeepCompilationOrder(t *testing.T) {
 	byteCheck := ast.BinaryExpr{
-		Op:    "==",
+		Op:    ">=",
 		Left:  ast.FuncCall{Name: "uint8", Args: []ast.Expr{ast.IntLit{Value: 0}}},
 		Right: ast.IntLit{Value: 0x47},
 	}
