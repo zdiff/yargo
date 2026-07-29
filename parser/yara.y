@@ -31,10 +31,11 @@ import (
 %token <num> INT_LIT
 %token <byt> HEX_BYTE
 %token HEX_WILDCARD
-%token AND OR AT ANY ALL OF THEM EQ
+%token AND OR NOT AT ANY ALL OF THEM EQ
 
 %left OR
 %left AND
+%right NOT
 %left EQ
 %nonassoc AT
 
@@ -263,6 +264,10 @@ expr:
 	| expr AND expr
 	{
 		$$ = ast.BinaryExpr{Op: "and", Left: $1, Right: $3}
+	}
+	| NOT expr
+	{
+		$$ = ast.NotExpr{Inner: $2}
 	}
 	| expr EQ expr
 	{

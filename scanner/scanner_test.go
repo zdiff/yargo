@@ -672,6 +672,44 @@ func TestRulesAreEvaluatedWithoutStringHits(t *testing.T) {
 	}
 }
 
+func TestScanNotCondition(t *testing.T) {
+	rs, err := parser.New().Parse(`
+		rule string_absent {
+			strings:
+				$a = "needle"
+			condition:
+				not $a
+		}
+	`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var absentMatches MatchRules
+	if err := rules.ScanMem([]byte("haystack"), 0, time.Second, &absentMatches); err != nil {
+		t.Fatalf("ScanMem() without string error = %v", err)
+	}
+	if len(absentMatches) != 1 || absentMatches[0].Rule != "string_absent" {
+		t.Fatalf("matches without string = %+v, want string_absent", absentMatches)
+	}
+	if len(absentMatches[0].Strings) != 0 {
+		t.Errorf("matching strings = %v, want none", absentMatches[0].Strings)
+	}
+
+	var presentMatches MatchRules
+	if err := rules.ScanMem([]byte("contains needle"), 0, time.Second, &presentMatches); err != nil {
+		t.Fatalf("ScanMem() with string error = %v", err)
+	}
+	if len(presentMatches) != 0 {
+		t.Errorf("matches with string = %+v, want none", presentMatches)
+	}
+}
+
 func TestRulesWithAndWithoutHitsKeepCompilationOrder(t *testing.T) {
 	byteCheck := ast.BinaryExpr{
 		Op:    "==",
