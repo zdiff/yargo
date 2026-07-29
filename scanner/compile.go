@@ -87,6 +87,7 @@ func CompileWithOptions(rs *ast.RuleSet, opts CompileOptions) (*Rules, error) {
 		}
 		for _, s := range r.Strings {
 			cr.stringNames = append(cr.stringNames, s.Name)
+			cr.stringPrivates = append(cr.stringPrivates, s.Modifiers.Private)
 			rules.slotRule = append(rules.slotRule, int32(ruleIdx))
 		}
 		rules.rules = append(rules.rules, cr)

@@ -198,6 +198,8 @@ modifiers:
 			$$.Fullword = true
 		case "nocase":
 			$$.Nocase = true
+		case "private":
+			$$.Private = true
 		default:
 			// known-but-unimplemented (wide, xor, ...), argument forms of
 			// supported modifiers, or future modifiers; recorded so the

@@ -139,10 +139,10 @@ func TestParseModifiers(t *testing.T) {
 		{`{ FF } base64`, ast.StringModifiers{Base64: true}},
 		{`"x" ascii`, ast.StringModifiers{Ascii: true}},
 		{`"x" nocase`, ast.StringModifiers{Nocase: true}},
+		{`"x" private`, ast.StringModifiers{Private: true}},
 		{`"x" wide`, ast.StringModifiers{Unsupported: []string{"wide"}}},
 		{`"x" xor`, ast.StringModifiers{Unsupported: []string{"xor"}}},
 		{`"x" base64wide`, ast.StringModifiers{Unsupported: []string{"base64wide"}}},
-		{`"x" private`, ast.StringModifiers{Unsupported: []string{"private"}}},
 		{`"x" wide xor nocase`, ast.StringModifiers{Nocase: true, Unsupported: []string{"wide", "xor"}}},
 		{`"x" xor(0x01-0xff)`, ast.StringModifiers{Unsupported: []string{"xor(0x01-0xff)"}}},
 		{`"x" xor ( 0x01 )`, ast.StringModifiers{Unsupported: []string{"xor( 0x01 )"}}},
@@ -184,7 +184,7 @@ rule first {
 
 rule second {
 	strings:
-		$b = "three" fullword
+		$b = "three" fullword private
 	condition:
 		any of them
 }`)
@@ -195,6 +195,44 @@ rule second {
 	}
 	if !reflect.DeepEqual(rs.Warnings, want) {
 		t.Errorf("expected warnings %q, got %q", want, rs.Warnings)
+	}
+}
+
+func TestParsePrivateModifierRules(t *testing.T) {
+	rs := mustParse(t, `
+rule private_only {
+	strings:
+		$secret = "needle" private
+	condition:
+		$secret
+}
+
+rule mixed {
+	strings:
+		$public = "visible"
+		$secret = "needle" private
+	condition:
+		$public and $secret
+}`)
+
+	if len(rs.Warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", rs.Warnings)
+	}
+
+	privateOnly := rs.Rules[0]
+	if len(privateOnly.Strings) != 1 || !privateOnly.Strings[0].Modifiers.Private {
+		t.Fatalf("expected private-only rule to preserve private modifier, got %+v", privateOnly.Strings)
+	}
+
+	mixed := rs.Rules[1]
+	if len(mixed.Strings) != 2 {
+		t.Fatalf("expected 2 strings in mixed rule, got %d", len(mixed.Strings))
+	}
+	if mixed.Strings[0].Modifiers.Private {
+		t.Errorf("expected $public to remain public")
+	}
+	if !mixed.Strings[1].Modifiers.Private {
+		t.Errorf("expected $secret to be private")
 	}
 }
 

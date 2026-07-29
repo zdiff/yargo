@@ -88,11 +88,12 @@ type (
 
 	// compiledRule holds the compiled form of a single YARA rule.
 	compiledRule struct {
-		name        string
-		metas       []Meta
-		condition   ast.Expr
-		stringNames []string
-		slotBase    int32 // slot of this rule's first string
+		name           string
+		metas          []Meta
+		condition      ast.Expr
+		stringNames    []string
+		stringPrivates []bool
+		slotBase       int32 // slot of this rule's first string
 	}
 
 	// hit records one confirmed match. Every string of every rule owns a
@@ -392,13 +393,19 @@ func (r *Rules) evaluateRules(ctx context.Context, buf []byte, hits []hit, cb Sc
 
 		// hits are grouped by slot, so strings come out ordered by string
 		// index and then by position. Only rules that actually match pay
-		// for copying their match data out of the buffer.
-		strings := make([]MatchString, len(ruleHits))
-		for k, h := range ruleHits {
-			strings[k] = MatchString{
-				Name: cr.stringNames[h.slot-cr.slotBase],
-				Data: bytes.Clone(buf[h.pos : h.pos+int(h.n)]),
+		// for copying their match data out of the buffer. Private strings
+		// still participate fully in condition evaluation but are filtered
+		// from the public match result here.
+		strings := make([]MatchString, 0, len(ruleHits))
+		for _, h := range ruleHits {
+			idx := int(h.slot - cr.slotBase)
+			if cr.stringPrivates[idx] {
+				continue
 			}
+			strings = append(strings, MatchString{
+				Name: cr.stringNames[idx],
+				Data: bytes.Clone(buf[h.pos : h.pos+int(h.n)]),
+			})
 		}
 
 		abort, err := cb.RuleMatching(&MatchRule{

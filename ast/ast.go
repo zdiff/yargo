@@ -36,6 +36,7 @@ type StringModifiers struct {
 	Base64   bool
 	Fullword bool
 	Nocase   bool
+	Private  bool
 	// Unsupported holds modifiers the scanner cannot honor (e.g. wide, xor,
 	// or base64 with a custom alphabet). Compilation skips rules that use
 	// them, since matching without the modifier would be wrong.

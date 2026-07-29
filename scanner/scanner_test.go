@@ -410,6 +410,13 @@ rule plain {
 		$a = "needle"
 	condition:
 		any of them
+}
+
+rule private_rule {
+	strings:
+		$a = "needle" private
+	condition:
+		$a
 }`)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
@@ -418,8 +425,8 @@ rule plain {
 	if err != nil {
 		t.Fatalf("Compile() error = %v", err)
 	}
-	if got := rules.NumRules(); got != 1 {
-		t.Errorf("expected 1 compiled rule, got %d", got)
+	if got := rules.NumRules(); got != 2 {
+		t.Errorf("expected 2 compiled rules, got %d", got)
 	}
 
 	// a rule with an unsupported modifier must not match at all, even via
@@ -429,8 +436,107 @@ rule plain {
 	if err := rules.ScanMem([]byte("some needle here"), 0, time.Second, &matches); err != nil {
 		t.Fatalf("ScanMem() error = %v", err)
 	}
-	if len(matches) != 1 || matches[0].Rule != "plain" {
-		t.Errorf("expected only rule plain to match, got %v", matches)
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %v", matches)
+	}
+	if matches[0].Rule != "plain" {
+		t.Errorf("expected first match to be plain, got %q", matches[0].Rule)
+	}
+	if matches[1].Rule != "private_rule" {
+		t.Errorf("expected second match to be private_rule, got %q", matches[1].Rule)
+	}
+	if len(matches[1].Strings) != 0 {
+		t.Errorf("expected private_rule to suppress private string matches, got %v", matches[1].Strings)
+	}
+}
+
+func TestCompilePreservesPrivateStringMetadata(t *testing.T) {
+	rs := &ast.RuleSet{
+		Rules: []*ast.Rule{{
+			Name: "private_meta",
+			Strings: []*ast.StringDef{
+				{Name: "$public", Value: ast.TextString{Value: "visible"}},
+				{Name: "$secret", Value: ast.TextString{Value: "needle"}, Modifiers: ast.StringModifiers{Private: true}},
+			},
+			Condition: ast.AnyOf{Pattern: "them"},
+		}},
+	}
+
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	if got := rules.rules[0].stringPrivates; !slices.Equal(got, []bool{false, true}) {
+		t.Errorf("compiled private metadata = %v, want [false true]", got)
+	}
+}
+
+func TestPrivateStringMatchRuleContainsNoPrivateStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule private_only {
+	strings:
+		$secret = "needle" private
+	condition:
+		$secret
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("haystack needle haystack"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "private_only" {
+		t.Fatalf("matched rule = %q, want private_only", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 0 {
+		t.Errorf("expected private-only match to report no strings, got %v", matches[0].Strings)
+	}
+}
+
+func TestMixedRuleMatchRuleOmitsPrivateStrings(t *testing.T) {
+	rs, err := parser.New().Parse(`
+rule mixed_private {
+	strings:
+		$public = "visible"
+		$secret = "needle" private
+	condition:
+		$public and $secret
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	rules, err := Compile(rs)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	var matches MatchRules
+	if err := rules.ScanMem([]byte("visible needle"), 0, time.Second, &matches); err != nil {
+		t.Fatalf("ScanMem() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	if matches[0].Rule != "mixed_private" {
+		t.Fatalf("matched rule = %q, want mixed_private", matches[0].Rule)
+	}
+	if len(matches[0].Strings) != 1 {
+		t.Fatalf("expected only the public string to be reported, got %v", matches[0].Strings)
+	}
+	if matches[0].Strings[0].Name != "$public" {
+		t.Errorf("reported string = %q, want $public", matches[0].Strings[0].Name)
+	}
+	if string(matches[0].Strings[0].Data) != "visible" {
+		t.Errorf("reported data = %q, want visible", matches[0].Strings[0].Data)
 	}
 }
 
