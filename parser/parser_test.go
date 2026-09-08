@@ -88,8 +88,8 @@ func TestParseHexStrings(t *testing.T) {
 		{"jump unbounded", "{ FF [-] D8 }", []ast.HexToken{ast.HexByte{Value: 0xFF}, ast.HexJump{}, ast.HexByte{Value: 0xD8}}},
 		{"jump min only", "{ FF [4-] D8 }", []ast.HexToken{ast.HexByte{Value: 0xFF}, ast.HexJump{Min: new(4)}, ast.HexByte{Value: 0xD8}}},
 		{"jump max only", "{ FF [-16] D8 }", []ast.HexToken{ast.HexByte{Value: 0xFF}, ast.HexJump{Max: new(16)}, ast.HexByte{Value: 0xD8}}},
-		{"alternation", "{ FF (41|42) D8 }", []ast.HexToken{ast.HexByte{Value: 0xFF}, ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: bytePtr(0x41)}, {Byte: bytePtr(0x42)}}}, ast.HexByte{Value: 0xD8}}},
-		{"alt with wildcard", "{ (41|??) }", []ast.HexToken{ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: bytePtr(0x41)}, {Wildcard: true}}}}},
+		{"alternation", "{ FF (41|42) D8 }", []ast.HexToken{ast.HexByte{Value: 0xFF}, ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: new(byte(0x41))}, {Byte: new(byte(0x42))}}}, ast.HexByte{Value: 0xD8}}},
+		{"alt with wildcard", "{ (41|??) }", []ast.HexToken{ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: new(byte(0x41))}, {Wildcard: true}}}}},
 	}
 
 	for _, tt := range tests {
@@ -442,7 +442,7 @@ func TestParseHexAltWithSpaces(t *testing.T) {
 	rs := mustParse(t, `rule test { strings: $ = { (AB | CD) EF } condition: any of them }`)
 	hex := rs.Rules[0].Strings[0].Value.(ast.HexString)
 	want := []ast.HexToken{
-		ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: bytePtr(0xAB)}, {Byte: bytePtr(0xCD)}}},
+		ast.HexAlt{Alternatives: []ast.HexAltItem{{Byte: new(byte(0xAB))}, {Byte: new(byte(0xCD))}}},
 		ast.HexByte{Value: 0xEF},
 	}
 	if !hexTokensEqual(hex.Tokens, want) {
@@ -611,12 +611,6 @@ func TestParseErrorMessagePreserved(t *testing.T) {
 }
 
 // Helpers
-
-//go:fix inline
-func intPtr(i int) *int { return new(i) }
-
-//go:fix inline
-func bytePtr(b byte) *byte { return new(b) }
 
 func hexTokensEqual(a, b []ast.HexToken) bool {
 	if len(a) != len(b) {
